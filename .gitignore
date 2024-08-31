@@ -1,0 +1,17 @@
+__pycache__/
+.vscode
+.pylintrc
+.python-version
+*.py[cod]
+*.lock
+/temp/
+.venv/
+.DS_Store
+*.log
+saved_info/
+data/
+wandb/
+autoencoder/weight/
+.ipynb_checkpoints/
+features/
+wddgan_generated_samples/
