@@ -84,7 +84,7 @@ def train(rank, gpu, args):
     netG = gen_net(args).to(device)
 
     if args.dataset in ['cifar10', 'stl10']:
-        netD = disc_net[2](nc=2 * args.num_channels, ngf=args.ngf,
+        netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
     else:
