@@ -9,6 +9,7 @@ from .lmdb_datasets import LMDBDataset
 from .lsun import LSUN
 from .stackmnist_data import StackedMNIST, _data_transforms_stacked_mnist
 from .coco import CustomCocoCaptions
+from .afhq import AfhqCat
 
 
 def create_dataset(args):
@@ -109,5 +110,17 @@ def create_dataset(args):
             annFile=os.path.join(
             args.datadir, 'annotations', 'captions_train2017.json'),
             transform=train_transform)
+    
+    elif args.dataset == 'afhq_cat':
+        train_transform = transforms.Compose([
+            transforms.Resize(args.image_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+        dataset = AfhqCat(
+            os.path.join(args.datadir, 'train', 'cat'), 
+            transform=train_transform
+        )
 
     return dataset

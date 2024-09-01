@@ -53,7 +53,7 @@ def grad_penalty_call(args, D_real, x_t):
 # %%
 def train(rank, gpu, args):
     from EMA import EMA
-    from score_sde.models.discriminator import Discriminator_large, Discriminator_small, SanDiscriminator_small
+    from score_sde.models.discriminator import Discriminator_large, Discriminator_small
     from score_sde.models.ncsnpp_generator_adagn import NCSNpp, WaveletNCSNpp
 
     torch.manual_seed(args.seed + rank)
@@ -71,7 +71,7 @@ def train(rank, gpu, args):
     #                                                                rank=rank)
     data_loader = torch.utils.data.DataLoader(dataset,
                                               batch_size=batch_size,
-                                              shuffle=False,
+                                              shuffle=True,
                                               num_workers=args.num_workers,
                                               pin_memory=True,
                                               drop_last=True)
@@ -79,7 +79,7 @@ def train(rank, gpu, args):
     args.image_size = args.current_resolution
     G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
     gen_net = G_NET_ZOO[args.net_type]
-    disc_net = [Discriminator_small, Discriminator_large, SanDiscriminator_small]
+    disc_net = [Discriminator_small, Discriminator_large]
     print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = gen_net(args).to(device)
 
@@ -127,7 +127,7 @@ def train(rank, gpu, args):
     config_path = args.AutoEncoder_config 
     ckpt_path = args.AutoEncoder_ckpt 
     
-    if args.dataset in ['cifar10', 'stl10', 'coco']:
+    if args.dataset in ['cifar10', 'stl10', 'coco', 'afhq_cat']:
 
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
@@ -340,7 +340,7 @@ def train(rank, gpu, args):
                     else:   
                         print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
                             epoch, iteration, errG.item(), errD.item()))
-                    wandb.log({"G_loss/100iter": errG.item(), "D_loss/iter": errD.item(), "time/100iter": elapsed_time / 1000})
+                    wandb.log({"G_loss_per_100iter": errG.item(), "D_loss_per_iter": errD.item(), "time_per_100iter": elapsed_time / 1000})
                     start = torch.cuda.Event(enable_timing=True)
                     end = torch.cuda.Event(enable_timing=True)
                     start.record()
@@ -354,7 +354,7 @@ def train(rank, gpu, args):
             end_epoch.record()
             torch.cuda.synchronize()
             time_per_epoch = start_epoch.elapsed_time(end_epoch)
-            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "time/epoch": time_per_epoch / 1000})
+            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "time_per_epoch": time_per_epoch / 1000})
             ########################################
             x_t_1 = torch.randn_like(posterior.sample())
             if args.dataset in ['cifar10'] and args.class_conditional:
