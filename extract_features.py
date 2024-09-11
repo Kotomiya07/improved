@@ -79,7 +79,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, choices=["cifar10","celeba","lsun","coco","imagenet"], required=True)
+    parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--datadir", type=str, required=True)
     parser.add_argument("--features_path", type=str, default="features")
     parser.add_argument("--image_size", type=int, required=True)

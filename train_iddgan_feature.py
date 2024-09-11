@@ -154,7 +154,7 @@ def train(rank, gpu, args):
     config_path = args.AutoEncoder_config
     ckpt_path = args.AutoEncoder_ckpt
 
-    if args.dataset in ['cifar10', 'stl10', 'coco']:
+    if args.dataset in ['cifar10', 'stl10', 'coco', 'afhq_cat']:
 
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
