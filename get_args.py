@@ -122,7 +122,7 @@ def get_args(args = []):
                         help='address for master')
     parser.add_argument('--master_port', type=str, default='6002',
                         help='port for master')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num_workers', type=int, default=2,
                         help='num_workers')
     
     ##### My parameter #####

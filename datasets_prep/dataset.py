@@ -112,11 +112,13 @@ def create_dataset(args):
             transform=train_transform)
     
     elif args.dataset == 'afhq_cat':
+        MEAN = [[0.5, 0.5, 0.5],[0.3053, 0.2815, 0.2438]]
+        STD  = [[0.5, 0.5, 0.5],[0.1789, 0.1567, 0.1587]]
         train_transform = transforms.Compose([
             transforms.Resize(args.image_size),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+            transforms.Normalize(MEAN[0], STD[0]),
         ])
         dataset = AfhqCat(
             os.path.join(args.datadir, 'train', 'cat'), 
