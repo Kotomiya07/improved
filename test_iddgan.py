@@ -83,7 +83,7 @@ def sample_and_test(args):
 
     iters_needed = 50000 // args.batch_size
 
-    save_dir = "./wddgan_generated_samples/{}".format(args.dataset)
+    save_dir = "./wddgan_generated_samples/{}/{}/{}".format(args.dataset, args.exp, args.epoch_id)
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     
@@ -163,7 +163,7 @@ def sample_and_test(args):
                     index = i * args.batch_size + j
                     torchvision.utils.save_image(
                         x, '{}/{}.jpg'.format(save_dir, index))
-                print('generating batch ', i)
+                #print('generating batch ', i)
 
         paths = [save_dir, real_img_dir]
         print(paths)
@@ -171,6 +171,7 @@ def sample_and_test(args):
         kwargs = {'batch_size': 100, 'device': device, 'dims': 2048}
         fid = calculate_fid_given_paths(paths=paths, **kwargs)
         print('FID = {}'.format(fid))
+        print('dataset: {}, exp: {}, epoch: {}, FID: {}'.format(args.dataset, args.exp, args.epoch_id, fid))
     else:
         x_t_1 = torch.randn(args.batch_size, args.num_channels,
                             args.image_size, args.image_size).to(device)

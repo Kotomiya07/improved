@@ -250,6 +250,16 @@ else
 			--AutoEncoder_config ./autoencoder/config/LSUN_config.yaml \
 			--AutoEncoder_ckpt ./autoencoder/weight/LSUN_weight.ckpt \
 			--scale_factor 60.0 \
-			--batch_size 48 
+			--batch_size 48
+
+   elif [[ $DATASET == afhq_cat ]]; then
+		python3 test_iddgan.py --dataset afhq_cat --image_size 256 --exp  --num_channels 4 --num_channels_dae 128 \
+			--ch_mult 1 2 2 2  --num_timesteps 4 --num_res_blocks 3  --epoch_id 625 \
+			--current_resolution 32 --attn_resolutions 16 \
+			--compute_fid --compute_fid --real_img_dir pytorch_fid/lsun_church_stat.npy \
+			--AutoEncoder_config ./autoencoder/config/LSUN_config.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/LSUN_weight.ckpt \
+			--scale_factor 60.0 \
+			--batch_size 48
 	fi
 fi
