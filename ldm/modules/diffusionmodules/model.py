@@ -564,7 +564,6 @@ class Decoder(nn.Module):
         h = nonlinearity(h)
         h = self.conv_out(h)
         if self.tanh_out:
-            print("OUTTTT")
             h = torch.tanh(h)
         return h
 

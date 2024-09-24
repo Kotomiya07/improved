@@ -212,14 +212,14 @@ if [[ $MODE == train ]]; then
 else
 	echo "==> Testing IDDGAN"
 	if [[ $DATASET == cifar10 ]]; then
-		python3 test_iddgan.py --dataset cifar10 --exp atn32_g122_2block_d3_Recloss_nz50_SmL --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
-			--num_res_blocks 2 --nz 50 --z_emb_dim 256 --n_mlp 4 --ch_mult 1 2 2 --epoch_id 950 \
+		python3 test_iddgan.py --dataset cifar10 --exp kl-f2-4 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --nz 50 --z_emb_dim 256 --n_mlp 4 --ch_mult 1 2 2 --epoch_id 1300 \
 			--image_size 32 --current_resolution 16 --attn_resolutions 32 \
 			--scale_factor 105.0 \
 			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
 			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
-			--batch_size 256 \
-			--compute_fid --real_img_dir pytorch_fid/cifar10_train_stat.npy 
+			--batch_size 250 \
+			--fid_only --real_img_dir pytorch_fid/cifar10_train_stat.npy 
 
 	elif [[ $DATASET == cifar10_cond ]]; then
 		python3 test_iddgan.py --dataset cifar10 --exp cifar-10-cond --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \

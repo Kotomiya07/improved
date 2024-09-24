@@ -41,9 +41,10 @@ def sample_and_test(args):
     ckpt = torch.load('./saved_info/{}/{}/netG_{}.pth'.format(
         args.dataset, args.exp, args.epoch_id), map_location=device)
 
+    # DDPで学習したら以下を適用する
     # loading weights from ddp in single gpu
-    for key in list(ckpt.keys()):
-        ckpt[key[7:]] = ckpt.pop(key)
+    #for key in list(ckpt.keys()):
+    #    ckpt[key[7:]] = ckpt.pop(key)
 
     netG.load_state_dict(ckpt, strict=False)
     netG.eval()
@@ -90,6 +91,14 @@ def sample_and_test(args):
     if args.dataset in ['cifar10'] and args.class_conditional:
         class_embedding = nn.Embedding(10, args.nz).to(device)
 
+    if args.fid_only:
+        paths = [save_dir, real_img_dir]
+        print(paths)
+    
+        kwargs = {'batch_size': 100, 'device': device, 'dims': 2048}
+        fid = calculate_fid_given_paths(paths=paths, **kwargs)
+        print('dataset: {}, exp: {}, epoch: {}, FID: {}'.format(args.dataset, args.exp, args.epoch_id, fid))
+
     if args.measure_time:
         x_t_1 = torch.randn(args.batch_size, args.num_channels,
                             args.image_size, args.image_size).to(device)
@@ -127,7 +136,6 @@ def sample_and_test(args):
         std_syn = np.std(timings)
         print("Inference time: {:.2f}+/-{:.2f}ms".format(mean_syn, std_syn))
         exit(0)
-
 
     if args.compute_fid:
         for i in range(iters_needed):
@@ -291,6 +299,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--AutoEncoder_ckpt', default='./autoencoder/weight/last_big.ckpt', help='path of weight for AntoEncoder')
     parser.add_argument('--class_conditional', action='store_true', default=False)
+
+    parser.add_argument('--fid_only', action='store_true', default=False)
     args = parser.parse_args()
 
     sample_and_test(args)
