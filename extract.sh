@@ -16,6 +16,9 @@ if [[ $DATASET == cifar10 ]]; then
 elif [[ $DATASET == coco ]]; then
     python3 extract_features.py --dataset coco --datadir data/coco/ --image_size $SIZE --vae ema
 
+elif [[ $DATASET == afhq_cat ]]; then
+    python3 extract_features.py --dataset afhq_cat --datadir data/afhq/ --image_size $SIZE --vae ema
+
 elif [[ $DATASET == celeba_256 ]]; then
     python3 extract_features.py --dataset celeba_256 --datadir data/celeba/celeba-lmdb/ --image_size 256 --vae ema
 

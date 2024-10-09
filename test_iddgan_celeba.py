@@ -73,7 +73,7 @@ def sample_and_test(args):
     config_path = args.AutoEncoder_config 
     ckpt_path = args.AutoEncoder_ckpt 
     
-    if args.dataset in ['cifar10', 'stl10']:
+    if args.dataset in ['cifar10', 'stl10'] or True:
 
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
@@ -102,7 +102,7 @@ def sample_and_test(args):
 
     iters_needed = 50000 // args.batch_size
 
-    save_dir = "./wddgan_generated_samples/{}".format(args.dataset)
+    save_dir = "./wddgan_generated_samples/{}/{}/{}".format(args.dataset, args.exp, args.epoch_id)
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
@@ -181,6 +181,7 @@ def sample_and_test(args):
         kwargs = {'batch_size': 100, 'device': device, 'dims': 2048}
         fid = calculate_fid_given_paths(paths=paths, **kwargs)
         print('FID = {}'.format(fid))
+        print('dataset: {}, exp: {}, epoch: {}, FID: {}'.format(args.dataset, args.exp, args.epoch_id, fid))
     else:
         x_t_1 = torch.randn(args.batch_size, args.num_channels,
                             args.image_size, args.image_size).to(device)
@@ -299,7 +300,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         '--AutoEncoder_ckpt', default='./autoencoder/weight/last_big.ckpt', help='path of weight for AntoEncoder')
-    
+    parser.add_argument('--class_conditional', action='store_true', default=False)
     args = parser.parse_args()
 
     sample_and_test(args)

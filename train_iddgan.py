@@ -297,7 +297,6 @@ def train(rank, gpu, args):
                             epoch, iteration, errG.item(), errD.item()))
                     wandb.log({"iteration:": iteration, "G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "elapsed_time": elapsed_time / 1000})
                     start.record()
-                    break
 
         if not args.no_lr_decay:
 
@@ -484,6 +483,7 @@ if __name__ == '__main__':
         '--AutoEncoder_ckpt', default='./autoencoder/weight/last_big.ckpt', help='path of weight for AntoEncoder')
     
     parser.add_argument("--sigmoid_learning", action="store_true")
+    parser.add_argument("--class_conditional", action="store_true", default=False)
     
     args = parser.parse_args()
 

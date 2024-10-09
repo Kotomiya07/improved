@@ -1,4 +1,5 @@
 import argparse
+from models import DiT_models
 
 def get_args(args = []):
     parser = argparse.ArgumentParser('ddgan parameters')
@@ -122,7 +123,7 @@ def get_args(args = []):
                         help='address for master')
     parser.add_argument('--master_port', type=str, default='6002',
                         help='port for master')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num_workers', type=int, default=2,
                         help='num_workers')
     
     ##### My parameter #####
@@ -136,6 +137,8 @@ def get_args(args = []):
     
     parser.add_argument("--sigmoid_learning", action="store_true")
     parser.add_argument("--class_conditional", action="store_true", default=False)
+    
+    parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
     
     args = parser.parse_args(args)
 
