@@ -3,8 +3,8 @@ name = "improved-ddgan"
 version = "0.1.0"
 description = "Improved DDGAN"
 dependencies = [
-    "torch==2.2.2+cu121",
-    "torchvision==0.17.2+cu121",
+    "torch==2.2.2+cu118",
+    "torchvision==0.17.2+cu118",
     "ftfy>=6.2.3",
     "regex>=2024.7.24",
     "tqdm>=4.64.1",
@@ -44,6 +44,9 @@ managed = true
 dev-dependencies = [
     "jupyter>=1.1.1",
 ]
+dev-dependencies = [
+    "jupyter>=1.1.1",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -53,5 +56,5 @@ packages = ["src/improved_ddgan"]
 
 [[tool.rye.sources]]
 name = "torch"
-url = "https://download.pytorch.org/whl/cu121"
+url = "https://download.pytorch.org/whl/cu118"
 type = "index"

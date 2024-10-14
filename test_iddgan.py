@@ -42,6 +42,7 @@ def sample_and_test(args):
         args.dataset, args.exp, args.epoch_id), map_location=device)
 
     # DDPで学習したら以下を適用する
+    # DDPで学習したら以下を適用する
     # loading weights from ddp in single gpu
     if not args.no_ddp:
         for key in list(ckpt.keys()):
@@ -85,6 +86,7 @@ def sample_and_test(args):
 
     iters_needed = 50000 // args.batch_size
 
+    save_dir = "./wddgan_generated_samples/{}/{}/{}".format(args.dataset, args.exp, args.epoch_id)
     save_dir = "./wddgan_generated_samples/{}/{}/{}".format(args.dataset, args.exp, args.epoch_id)
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -175,6 +177,7 @@ def sample_and_test(args):
                     index = i * args.batch_size + j
                     torchvision.utils.save_image(
                         x, '{}/{}.jpg'.format(save_dir, index))
+                #print('generating batch ', i)
                 #print('generating batch ', i)
 
         paths = [save_dir, real_img_dir]

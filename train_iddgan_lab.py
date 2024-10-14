@@ -21,6 +21,8 @@ import yaml
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 import wandb
+from accelerate import Accelerator
+from accelerate import DistributedDataParallelKwargs
 
 def load_model_from_config(config_path, ckpt):
     print(f"Loading model from {ckpt}")
@@ -59,16 +61,16 @@ def train(rank, gpu, args):
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
     torch.cuda.manual_seed_all(args.seed + rank)
-    device = torch.device('cuda:{}'.format(gpu))
+    
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
+    accelerator.device
 
     batch_size = args.batch_size
 
     nz = args.nz  # latent dimension
 
     dataset = create_dataset(args)
-    #train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-    #                                                                num_replicas=args.world_size,
-    #                                                                rank=rank)
     data_loader = torch.utils.data.DataLoader(dataset,
                                               batch_size=batch_size,
                                               shuffle=True,
@@ -92,9 +94,6 @@ def train(rank, gpu, args):
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
 
-    #broadcast_params(netG.parameters())
-    #broadcast_params(netD.parameters())
-
     optimizerD = optim.Adam(filter(lambda p: p.requires_grad, netD.parameters(
     )), lr=args.lr_d, betas=(args.beta1, args.beta2))
     optimizerG = optim.Adam(filter(lambda p: p.requires_grad, netG.parameters(
@@ -109,9 +108,9 @@ def train(rank, gpu, args):
         optimizerD, args.num_epoch, eta_min=1e-5)
 
     # ddp
-    #netG = nn.parallel.DistributedDataParallel(
-    #    netG, device_ids=[gpu], find_unused_parameters=True)
-    #netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
+    data_loader, netG, netD, optimizerG, optimizerD, schedulerG, schedulerD = accelerator.prepare(
+        data_loader, netG, netD, optimizerG, optimizerD, schedulerG, schedulerD
+    )
 
     """############### DELETE TO AVOID ERROR ###############"""
     # Wavelet Pooling
@@ -127,7 +126,7 @@ def train(rank, gpu, args):
     config_path = args.AutoEncoder_config 
     ckpt_path = args.AutoEncoder_ckpt 
     
-    if args.dataset in ['cifar10', 'stl10', 'coco', 'afhq_cat']:
+    if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
 
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
@@ -154,7 +153,8 @@ def train(rank, gpu, args):
         if not os.path.exists(exp_path):
             os.makedirs(exp_path)
             copy_source(__file__, exp_path)
-            shutil.copytree('score_sde/models', os.path.join(exp_path, 'score_sde/models'))
+            shutil.copytree('score_sde/models',
+                            os.path.join(exp_path, 'score_sde/models'))
 
     coeff = Diffusion_Coefficients(args, device)
     pos_coeff = Posterior_Coefficients(args, device)
@@ -185,25 +185,7 @@ def train(rank, gpu, args):
     beta = np.linspace(-gamma, gamma, args.num_epoch+1)
     alpha = 1 - 1 / (1+np.exp(-beta))
 
-    if args.dataset in ['cifar10'] and args.class_conditional:
-        class_embedding = nn.Embedding(10, nz).to(device)
-
-    nrow = 2
-    if args.batch_size >= 5:
-        nrow = 3
-    if args.batch_size >= 10:
-        nrow = 10
-
     for epoch in range(init_epoch, args.num_epoch + 1):
-        #train_sampler.set_epoch(epoch)
-        
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
-
-        start_epoch = torch.cuda.Event(enable_timing=True)
-        end_epoch = torch.cuda.Event(enable_timing=True)
-        start_epoch.record()
         for iteration, (x, y) in enumerate(data_loader):
             for p in netD.parameters():
                 p.requires_grad = True
@@ -229,42 +211,15 @@ def train(rank, gpu, args):
             # sample t
             t = torch.randint(0, args.num_timesteps,
                               (real_data.size(0),), device=device)
-            
-            if args.dataset in ['cifar10'] and args.class_conditional:
-                y = y.to(device)
-                y_emb = class_embedding(y)
 
             x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
             x_t.requires_grad = True
-
-            """################# Save Sample #################"""
-            if iteration % 10 == 0:
-                print(f"Epoch: {epoch}, Iteration: {iteration}")
-            if iteration % 50 == 0:
-                x_t_1 = torch.randn_like(posterior.sample())
-                if args.dataset in ['cifar10'] and args.class_conditional:
-                    y = torch.arange(0, 10).repeat(x_t_1.size(0)//10 + 1)[:x_t_1.size(0)].to(device)
-                    y_emb = class_embedding(y)
-                    fake_sample = sample_from_model(
-                        pos_coeff, netG, args.num_timesteps, x_t_1, T, args, class_emb=y_emb)
-                else:
-                    fake_sample = sample_from_model(
-                        pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
-                fake_sample *= args.scale_factor #300
-                with torch.no_grad():
-                    fake_sample = AutoEncoder.decode(fake_sample)
-
-                #rec_data = (torch.clamp(rec_data, -1, 1) + 1) / 2
-                fake_sample = (torch.clamp(fake_sample, -1, 1) + 1) / 2  # 0-1
-                torchvision.utils.save_image(fake_sample, os.path.join(
-                    exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)), nrow=nrow)
-
 
             # train with real
             D_real = netD(x_t, t, x_tp1.detach()).view(-1)
             errD_real = F.softplus(-D_real).mean()
 
-            errD_real.backward(retain_graph=True)
+            accelerator.backward(errD_real)
 
             if args.lazy_reg is None:
                 grad_penalty_call(args, D_real, x_t)
@@ -274,16 +229,13 @@ def train(rank, gpu, args):
 
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
-            if args.dataset in ['cifar10'] and args.class_conditional:
-                x_0_predict = netG(x_tp1.detach(), t, torch.cat([latent_z, y_emb], dim=1).detach())
-            else:
-                x_0_predict = netG(x_tp1.detach(), t, latent_z)
+            x_0_predict = netG(x_tp1.detach(), t, latent_z)
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             errD_fake = F.softplus(output).mean()
 
-            errD_fake.backward()
+            accelerator.backward(errD_fake)
 
             errD = errD_real + errD_fake
             # Update D
@@ -302,10 +254,7 @@ def train(rank, gpu, args):
             x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
 
             latent_z = torch.randn(batch_size, nz, device=device)
-            if args.dataset in ['cifar10'] and args.class_conditional:
-                x_0_predict = netG(x_tp1.detach(), t, torch.cat([latent_z, y_emb], dim=1).detach())
-            else:
-                x_0_predict = netG(x_tp1.detach(), t, latent_z)
+            x_0_predict = netG(x_tp1.detach(), t, latent_z)
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
@@ -322,28 +271,21 @@ def train(rank, gpu, args):
                 errG = errG + rec_loss
             
 
-            errG.backward()
+            accelerator.backward(errG)
             optimizerG.step()
 
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
-                    end.record()
-                    torch.cuda.synchronize()
-                    elapsed_time = start.elapsed_time(end)
                     if args.sigmoid_learning:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, alpha: {}'.format(
+                        accelerator.print('epoch {} iteration{}, G Loss: {}, D Loss: {}, alpha: {}'.format(
                             epoch, iteration, errG.item(), errD.item(), alpha[epoch]))
                     elif args.rec_loss:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, rec_loss: {}'.format(
+                        accelerator.print('epoch {} iteration{}, G Loss: {}, D Loss: {}, rec_loss: {}'.format(
                             epoch, iteration, errG.item(), errD.item(), rec_loss.item()))
                     else:   
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
+                        accelerator.print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
                             epoch, iteration, errG.item(), errD.item()))
-                    wandb.log({"G_loss_per_100iter": errG.item(), "D_loss_per_iter": errD.item(), "time_per_100iter": elapsed_time / 1000})
-                    start = torch.cuda.Event(enable_timing=True)
-                    end = torch.cuda.Event(enable_timing=True)
-                    start.record()
 
         if not args.no_lr_decay:
 
@@ -351,20 +293,11 @@ def train(rank, gpu, args):
             schedulerD.step()
 
         if rank == 0:
-            end_epoch.record()
-            torch.cuda.synchronize()
-            time_per_epoch = start_epoch.elapsed_time(end_epoch)
-            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "time_per_epoch": time_per_epoch / 1000})
+            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
             ########################################
             x_t_1 = torch.randn_like(posterior.sample())
-            if args.dataset in ['cifar10'] and args.class_conditional:
-                y = torch.arange(0, 10).repeat(x_t_1.size(0)//10 + 1)[:x_t_1.size(0)].to(device)
-                y_emb = class_embedding(y)
-                fake_sample = sample_from_model(
-                    pos_coeff, netG, args.num_timesteps, x_t_1, T, args, class_emb=y_emb)
-            else:
-                fake_sample = sample_from_model(
-                    pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
+            fake_sample = sample_from_model(
+                pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 
             """############## CHANGE HERE: DECODER ##############"""
             fake_sample *= args.scale_factor #300
@@ -379,9 +312,9 @@ def train(rank, gpu, args):
             """############## END HERE: DECODER ##############"""
 
             torchvision.utils.save_image(fake_sample, os.path.join(
-                exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)), nrow=nrow)
+                exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)))
             torchvision.utils.save_image(
-                real_data, os.path.join(exp_path, 'real_data.png'),nrow=nrow)
+                real_data, os.path.join(exp_path, 'real_data.png'))
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
@@ -540,7 +473,6 @@ if __name__ == '__main__':
         '--AutoEncoder_ckpt', default='./autoencoder/weight/last_big.ckpt', help='path of weight for AntoEncoder')
     
     parser.add_argument("--sigmoid_learning", action="store_true")
-
     parser.add_argument("--class_conditional", action="store_true", default=False)
     
     args = parser.parse_args()
@@ -548,53 +480,45 @@ if __name__ == '__main__':
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
 
-    if size > 1:
-        processes = []
-        for rank in range(size):
-            args.local_rank = rank
-            global_rank = rank + args.node_rank * args.num_process_per_node
-            global_size = args.num_proc_node * args.num_process_per_node
-            args.global_rank = global_rank
-            print('Node rank %d, local proc %d, global proc %d' %
-                  (args.node_rank, rank, global_rank))
-            p = Process(target=init_processes, args=(
-                global_rank, global_size, train, args))
-            p.start()
-            processes.append(p)
 
-        for p in processes:
-            p.join()
-    else:
-        print('starting in debug mode')
-        wandb.init(
-            project="IDDGAN",
-            config={
-                "dataset": args.dataset,
-                "image_size": args.image_size,
-                "channels": args.num_channels,
-                "timesteps": args.num_timesteps,
-                "nz": args.nz,
-                "epochs": args.num_epoch,
-                "ngf": args.ngf,
-                "lr_g": args.lr_g,
-                "lr_d": args.lr_d,
-                "batch_size": args.batch_size,
-                "r1_gamma": args.r1_gamma,
-                "lazy_reg": args.lazy_reg,
-                "use_ema": args.use_ema,
-                "ema_decay": args.ema_decay,
-                "no_lr_decay": args.no_lr_decay,
-                "use_pytorch_wavelet": args.use_pytorch_wavelet,
-                "rec_loss": args.rec_loss,
-                "net_type": args.net_type,
-                "num_disc_layers": args.num_disc_layers,
-                "no_use_fbn": args.no_use_fbn,
-                "no_use_freq": args.no_use_freq,
-                "no_use_residual": args.no_use_residual,
-                "scale_factor": args.scale_factor,
-                "AutoEncoder_config": args.AutoEncoder_config,
-                "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
-                "sigmoid_learning": args.sigmoid_learning,
-            }
-        )
-        train(0, 0, args)
+    print('starting in debug mode')
+    wandb.init(
+        project="TEST",
+        name=args.exp,
+        config={
+            "dataset": args.dataset,
+            "image_size": args.image_size,
+            "channels": args.num_channels,
+            "channels_dae": args.num_channels_dae,
+            "ch_nult": args.ch_mult,
+            "timesteps": args.num_timesteps,
+            "res_blocks": args.num_res_blocks,
+            "nz": args.nz,
+            "epochs": args.num_epoch,
+            "ngf": args.ngf,
+            "lr_g": args.lr_g,
+            "lr_d": args.lr_d,
+            "batch_size": args.batch_size,
+            "r1_gamma": args.r1_gamma,
+            "lazy_reg": args.lazy_reg,
+            "embedding_type": args.embedding_type,
+            "use_ema": args.use_ema,
+            "ema_decay": args.ema_decay,
+            "no_lr_decay": args.no_lr_decay,
+            "z_emb_dim": args.z_emb_dim,
+            "attn_resolutions": args.attn_resolutions,
+            "use_pytorch_wavelet": args.use_pytorch_wavelet,
+            "rec_loss": args.rec_loss,
+            "net_type": args.net_type,
+            "num_disc_layers": args.num_disc_layers,
+            "no_use_fbn": args.no_use_fbn,
+            "no_use_freq": args.no_use_freq,
+            "no_use_residual": args.no_use_residual,
+            "scale_factor": args.scale_factor,
+            "AutoEncoder_config": args.AutoEncoder_config,
+            "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
+            "sigmoid_learning": args.sigmoid_learning,
+        }
+    )
+    train(0, 1, args)
+    wandb.finish()

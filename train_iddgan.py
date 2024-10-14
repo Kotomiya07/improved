@@ -66,15 +66,15 @@ def train(rank, gpu, args):
     nz = args.nz  # latent dimension
 
     dataset = create_dataset(args)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-                                                                    num_replicas=args.world_size,
-                                                                    rank=rank)
+    #train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
+    #                                                                num_replicas=args.world_size,
+    #                                                                rank=rank)
     data_loader = torch.utils.data.DataLoader(dataset,
                                               batch_size=batch_size,
-                                              shuffle=False,
+                                              shuffle=True,                 # fix
                                               num_workers=args.num_workers,
                                               pin_memory=True,
-                                              sampler=train_sampler,
+                                              #sampler=train_sampler,
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
@@ -93,8 +93,8 @@ def train(rank, gpu, args):
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
 
-    broadcast_params(netG.parameters())
-    broadcast_params(netD.parameters())
+    #broadcast_params(netG.parameters())
+    #broadcast_params(netD.parameters())
 
     optimizerD = optim.Adam(filter(lambda p: p.requires_grad, netD.parameters(
     )), lr=args.lr_d, betas=(args.beta1, args.beta2))
@@ -110,9 +110,9 @@ def train(rank, gpu, args):
         optimizerD, args.num_epoch, eta_min=1e-5)
 
     # ddp
-    netG = nn.parallel.DistributedDataParallel(
-        netG, device_ids=[gpu], find_unused_parameters=True)
-    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
+    #netG = nn.parallel.DistributedDataParallel(
+    #    netG, device_ids=[gpu], find_unused_parameters=True)
+    #netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     """############### DELETE TO AVOID ERROR ###############"""
     # Wavelet Pooling
@@ -128,7 +128,7 @@ def train(rank, gpu, args):
     config_path = args.AutoEncoder_config 
     ckpt_path = args.AutoEncoder_ckpt 
     
-    if args.dataset in ['cifar10', 'stl10', 'coco']:
+    if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
 
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
@@ -155,7 +155,8 @@ def train(rank, gpu, args):
         if not os.path.exists(exp_path):
             os.makedirs(exp_path)
             copy_source(__file__, exp_path)
-            shutil.copytree('score_sde/models', os.path.join(exp_path, 'score_sde/models'))
+            shutil.copytree('score_sde/models',
+                            os.path.join(exp_path, 'score_sde/models'))
 
     coeff = Diffusion_Coefficients(args, device)
     pos_coeff = Posterior_Coefficients(args, device)
@@ -187,11 +188,8 @@ def train(rank, gpu, args):
     alpha = 1 - 1 / (1+np.exp(-beta))
 
     for epoch in range(init_epoch, args.num_epoch + 1):
-        train_sampler.set_epoch(epoch)
-        
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
+        #train_sampler.set_epoch(epoch)
+
         for iteration, (x, y) in enumerate(data_loader):
             for p in netD.parameters():
                 p.requires_grad = True
@@ -283,9 +281,6 @@ def train(rank, gpu, args):
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
-                    end.record()
-                    torch.cuda.synchronize()
-                    elapsed_time = start.elapsed_time(end)
                     if args.sigmoid_learning:
                         print('epoch {} iteration{}, G Loss: {}, D Loss: {}, alpha: {}'.format(
                             epoch, iteration, errG.item(), errD.item(), alpha[epoch]))
@@ -295,8 +290,6 @@ def train(rank, gpu, args):
                     else:   
                         print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
                             epoch, iteration, errG.item(), errD.item()))
-                    wandb.log({"iteration:": iteration, "G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "elapsed_time": elapsed_time / 1000})
-                    start.record()
 
         if not args.no_lr_decay:
 
@@ -304,6 +297,7 @@ def train(rank, gpu, args):
             schedulerD.step()
 
         if rank == 0:
+            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
             ########################################
             x_t_1 = torch.randn_like(posterior.sample())
             fake_sample = sample_from_model(
@@ -345,7 +339,6 @@ def train(rank, gpu, args):
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(
                         store_params_in_ema=True)
-
 
 # %%
 if __name__ == '__main__':
@@ -490,6 +483,45 @@ if __name__ == '__main__':
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
 
+    wandb.init(
+        project="TEST",
+        name=args.exp,
+        config={
+            "dataset": args.dataset,
+            "image_size": args.image_size,
+            "channels": args.num_channels,
+            "channels_dae": args.num_channels_dae,
+            "ch_nult": args.ch_mult,
+            "timesteps": args.num_timesteps,
+            "res_blocks": args.num_res_blocks,
+            "nz": args.nz,
+            "epochs": args.num_epoch,
+            "ngf": args.ngf,
+            "lr_g": args.lr_g,
+            "lr_d": args.lr_d,
+            "batch_size": args.batch_size,
+            "r1_gamma": args.r1_gamma,
+            "lazy_reg": args.lazy_reg,
+            "embedding_type": args.embedding_type,
+            "use_ema": args.use_ema,
+            "ema_decay": args.ema_decay,
+            "no_lr_decay": args.no_lr_decay,
+            "z_emb_dim": args.z_emb_dim,
+            "attn_resolutions": args.attn_resolutions,
+            "use_pytorch_wavelet": args.use_pytorch_wavelet,
+            "rec_loss": args.rec_loss,
+            "net_type": args.net_type,
+            "num_disc_layers": args.num_disc_layers,
+            "no_use_fbn": args.no_use_fbn,
+            "no_use_freq": args.no_use_freq,
+            "no_use_residual": args.no_use_residual,
+            "scale_factor": args.scale_factor,
+            "AutoEncoder_config": args.AutoEncoder_config,
+            "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
+            "sigmoid_learning": args.sigmoid_learning,
+        }
+    )
+
     if size > 1:
         processes = []
         for rank in range(size):
@@ -508,35 +540,4 @@ if __name__ == '__main__':
             p.join()
     else:
         print('starting in debug mode')
-        wandb.init(
-            project="IDDGAN",
-            config={
-                "dataset": args.dataset,
-                "image_size": args.image_size,
-                "channels": args.num_channels,
-                "timesteps": args.num_timesteps,
-                "nz": args.nz,
-                "epochs": args.num_epoch,
-                "ngf": args.ngf,
-                "lr_g": args.lr_g,
-                "lr_d": args.lr_d,
-                "batch_size": args.batch_size,
-                "r1_gamma": args.r1_gamma,
-                "lazy_reg": args.lazy_reg,
-                "use_ema": args.use_ema,
-                "ema_decay": args.ema_decay,
-                "no_lr_decay": args.no_lr_decay,
-                "use_pytorch_wavelet": args.use_pytorch_wavelet,
-                "rec_loss": args.rec_loss,
-                "net_type": args.net_type,
-                "num_disc_layers": args.num_disc_layers,
-                "no_use_fbn": args.no_use_fbn,
-                "no_use_freq": args.no_use_freq,
-                "no_use_residual": args.no_use_residual,
-                "scale_factor": args.scale_factor,
-                "AutoEncoder_config": args.AutoEncoder_config,
-                "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
-                "sigmoid_learning": args.sigmoid_learning,
-            }
-        )
         init_processes(0, size, train, args)
