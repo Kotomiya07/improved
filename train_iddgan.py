@@ -66,15 +66,15 @@ def train(rank, gpu, args):
     nz = args.nz  # latent dimension
 
     dataset = create_dataset(args)
-    #train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-    #                                                                num_replicas=args.world_size,
-    #                                                                rank=rank)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
+                                                                    num_replicas=args.world_size,
+                                                                    rank=rank)
     data_loader = torch.utils.data.DataLoader(dataset,
                                               batch_size=batch_size,
-                                              shuffle=True,                 # fix
+                                              shuffle=False,                 # fix
                                               num_workers=args.num_workers,
                                               pin_memory=True,
-                                              #sampler=train_sampler,
+                                              sampler=train_sampler,
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
@@ -93,8 +93,8 @@ def train(rank, gpu, args):
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
 
-    #broadcast_params(netG.parameters())
-    #broadcast_params(netD.parameters())
+    broadcast_params(netG.parameters())
+    broadcast_params(netD.parameters())
 
     optimizerD = optim.Adam(filter(lambda p: p.requires_grad, netD.parameters(
     )), lr=args.lr_d, betas=(args.beta1, args.beta2))
@@ -110,9 +110,9 @@ def train(rank, gpu, args):
         optimizerD, args.num_epoch, eta_min=1e-5)
 
     # ddp
-    #netG = nn.parallel.DistributedDataParallel(
-    #    netG, device_ids=[gpu], find_unused_parameters=True)
-    #netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
+    netG = nn.parallel.DistributedDataParallel(
+        netG, device_ids=[gpu], find_unused_parameters=True)
+    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     """############### DELETE TO AVOID ERROR ###############"""
     # Wavelet Pooling
@@ -128,7 +128,7 @@ def train(rank, gpu, args):
     config_path = args.AutoEncoder_config 
     ckpt_path = args.AutoEncoder_ckpt 
     
-    if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
+    if args.dataset in ['cifar10', 'stl10', 'afhq_cat'] or True:
 
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
@@ -297,7 +297,7 @@ def train(rank, gpu, args):
             schedulerD.step()
 
         if rank == 0:
-            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
+            #wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
             ########################################
             x_t_1 = torch.randn_like(posterior.sample())
             fake_sample = sample_from_model(
@@ -483,7 +483,7 @@ if __name__ == '__main__':
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
 
-    wandb.init(
+    """ wandb.init(
         project="TEST",
         name=args.exp,
         config={
@@ -520,7 +520,7 @@ if __name__ == '__main__':
             "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
             "sigmoid_learning": args.sigmoid_learning,
         }
-    )
+    ) """
 
     if size > 1:
         processes = []
