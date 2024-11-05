@@ -132,9 +132,9 @@ def train(rank, gpu, args):
 
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
-        
+
         AutoEncoder = instantiate_from_config(config['model'])
-        
+
 
         checkpoint = torch.load(ckpt_path, map_location=device)
         AutoEncoder.load_state_dict(checkpoint['state_dict'])
