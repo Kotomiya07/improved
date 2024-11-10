@@ -136,6 +136,9 @@ def get_args(args = []):
     
     parser.add_argument("--sigmoid_learning", action="store_true")
     parser.add_argument("--class_conditional", action="store_true", default=False)
+    # bCRのハイパーパラメータを追加
+    parser.add_argument('--lambda_fake', type=float, default=10.0, help='bCR regularization strength for fake images')
+    parser.add_argument('--lambda_real', type=float, default=10.0, help='bCR regularization strength for real images')
     
     args = parser.parse_args(args)
 

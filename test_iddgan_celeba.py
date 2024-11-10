@@ -14,6 +14,13 @@ from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 import yaml
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    # If tqdm is not available, provide a mock version of it
+    def tqdm(x):
+        return x
+
 def load_model_from_config(config_path, ckpt):
     print(f"Loading model from {ckpt}")
     config = OmegaConf.load(config_path)
@@ -146,7 +153,7 @@ def sample_and_test(args):
 
     
     if args.compute_fid:
-        for i in range(iters_needed):
+        for i in tqdm(range(iters_needed)):
             with torch.no_grad():
                 x_t_1 = torch.randn(
                     args.batch_size, args.num_channels, args.image_size, args.image_size).to(device)

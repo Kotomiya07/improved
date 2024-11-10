@@ -178,7 +178,7 @@ def sample_and_test(args):
 
         kwargs = {'batch_size': 100, 'device': device, 'dims': 2048}
         fid = calculate_fid_given_paths(paths=paths, **kwargs)
-        print('FID = {}'.format(fid))
+        #print('FID = {}'.format(fid))
         print('dataset: {}, exp: {}, epoch: {}, FID: {}'.format(args.dataset, args.exp, args.epoch_id, fid))
     else:
         x_t_1 = torch.randn(args.batch_size, args.num_channels,

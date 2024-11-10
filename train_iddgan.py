@@ -21,6 +21,28 @@ import yaml
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 import wandb
+from copy import deepcopy
+from collections import OrderedDict
+
+@torch.no_grad()
+def update_ema(ema_model, model, decay=0.9999):
+    """
+    Step the EMA model towards the current model.
+    """
+    ema_params = OrderedDict(ema_model.named_parameters())
+    model_params = OrderedDict(model.named_parameters())
+
+    for name, param in model_params.items():
+        name = name.replace("module.", "")
+        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
+        ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
+
+def requires_grad(model, flag=True):
+    """
+    Set requires_grad flag for all parameters in a model.
+    """
+    for p in model.parameters():
+        p.requires_grad = flag
 
 def load_model_from_config(config_path, ckpt):
     print(f"Loading model from {ckpt}")
@@ -101,8 +123,11 @@ def train(rank, gpu, args):
     optimizerG = optim.Adam(filter(lambda p: p.requires_grad, netG.parameters(
     )), lr=args.lr_g, betas=(args.beta1, args.beta2))
 
-    if args.use_ema:
-        optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
+    #if args.use_ema:
+    #    optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
+    
+    ema = deepcopy(netG).to(device)  # Create an EMA of the model for use after training
+    requires_grad(ema, False)
 
     schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizerG, args.num_epoch, eta_min=1e-5)
@@ -128,21 +153,21 @@ def train(rank, gpu, args):
     config_path = args.AutoEncoder_config 
     ckpt_path = args.AutoEncoder_ckpt 
     
-    if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
+    #if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
 
-        with open(config_path, 'r') as file:
-            config = yaml.safe_load(file)
-        
-        AutoEncoder = instantiate_from_config(config['model'])
-        
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
 
-        checkpoint = torch.load(ckpt_path, map_location=device)
-        AutoEncoder.load_state_dict(checkpoint['state_dict'])
-        AutoEncoder.eval()
-        AutoEncoder.to(device)
+    AutoEncoder = instantiate_from_config(config['model'])
+
+
+    checkpoint = torch.load(ckpt_path, map_location=device)
+    AutoEncoder.load_state_dict(checkpoint['state_dict'])
+    AutoEncoder.eval()
+    AutoEncoder.to(device)
     
-    else:
-        AutoEncoder = load_model_from_config(config_path, ckpt_path)
+    #else:
+    #    AutoEncoder = load_model_from_config(config_path, ckpt_path)
     """############### END DELETING ###############"""
     
     num_levels = int(np.log2(args.ori_image_size // args.current_resolution))
@@ -186,17 +211,18 @@ def train(rank, gpu, args):
     gamma = 6
     beta = np.linspace(-gamma, gamma, args.num_epoch+1)
     alpha = 1 - 1 / (1+np.exp(-beta))
+    
+    update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
+    ema.eval()
 
     for epoch in range(init_epoch, args.num_epoch + 1):
         #train_sampler.set_epoch(epoch)
 
         for iteration, (x, y) in enumerate(data_loader):
-            for p in netD.parameters():
-                p.requires_grad = True
+            requires_grad(netD)
             netD.zero_grad()
 
-            for p in netG.parameters():
-                p.requires_grad = False
+            requires_grad(netG, flag=False)
 
             # sample from p(x_0)
             x0 = x.to(device, non_blocking=True)
@@ -222,7 +248,8 @@ def train(rank, gpu, args):
             # train with real
             D_real = netD(x_t, t, x_tp1.detach()).view(-1)
             errD_real = F.softplus(-D_real).mean()
-
+            
+            
             errD_real.backward(retain_graph=True)
 
             if args.lazy_reg is None:
@@ -238,7 +265,8 @@ def train(rank, gpu, args):
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             errD_fake = F.softplus(output).mean()
-
+            
+            #optimizerD.zero_grad()
             errD_fake.backward()
 
             errD = errD_real + errD_fake
@@ -246,11 +274,9 @@ def train(rank, gpu, args):
             optimizerD.step()
 
             # update G
-            for p in netD.parameters():
-                p.requires_grad = False
+            requires_grad(netD, flag=False)
 
-            for p in netG.parameters():
-                p.requires_grad = True
+            requires_grad(netG)
             netG.zero_grad()
 
             t = torch.randint(0, args.num_timesteps,
@@ -274,9 +300,11 @@ def train(rank, gpu, args):
                 rec_loss = F.l1_loss(x_0_predict, real_data)
                 errG = errG + rec_loss
             
-
+            
+            #optimizerG.zero_grad()
             errG.backward()
             optimizerG.step()
+            update_ema(ema, netG)
 
             global_step += 1
             if iteration % 100 == 0:
@@ -330,15 +358,15 @@ def train(rank, gpu, args):
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
-                if args.use_ema:
-                    optimizerG.swap_parameters_with_ema(
-                        store_params_in_ema=True)
+                #if args.use_ema:
+                #    optimizerG.swap_parameters_with_ema(
+                #        store_params_in_ema=True)
 
                 torch.save(netG.state_dict(), os.path.join(
                     exp_path, 'netG_{}.pth'.format(epoch)))
-                if args.use_ema:
-                    optimizerG.swap_parameters_with_ema(
-                        store_params_in_ema=True)
+                #if args.use_ema:
+                #    optimizerG.swap_parameters_with_ema(
+                #        store_params_in_ema=True)
 
 # %%
 if __name__ == '__main__':
@@ -463,7 +491,7 @@ if __name__ == '__main__':
                         help='address for master')
     parser.add_argument('--master_port', type=str, default='6002',
                         help='port for master')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num_workers', type=int, default=16,
                         help='num_workers')
     
     ##### My parameter #####

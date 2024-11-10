@@ -17,22 +17,10 @@ from diffusion import sample_from_model, sample_posterior, \
 from torch.multiprocessing import Process
 from utils import init_processes, copy_source, broadcast_params
 import yaml
+
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 import wandb
-
-def load_model_from_config_old(config_path, ckpt):
-    print(f"Loading model from {ckpt}")
-    config = OmegaConf.load(config_path)
-    pl_sd = torch.load(ckpt, map_location="cpu")
-    #global_step = pl_sd["global_step"]
-    sd = pl_sd["state_dict"]
-    model = instantiate_from_config(config.model)
-    m, u = model.load_state_dict(sd, strict=False)
-    model = model.first_stage_model
-    model.cuda()
-    model.eval()
-    return model
 
 def load_model_from_config(config_path, ckpt):
     print(f"Loading model from {ckpt}")
@@ -45,7 +33,6 @@ def load_model_from_config(config_path, ckpt):
     model = model.first_stage_model
     model.cuda()
     model.eval()
-    del sd
     del m
     del u
     del pl_sd
@@ -97,7 +84,7 @@ def train(rank, gpu, args):
     print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = gen_net(args).to(device)
 
-    if args.dataset in ['cifar10', 'stl10', 'lsun', 'celeba']:
+    if args.dataset in ['cifar10', 'stl10']:
         netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
@@ -138,11 +125,10 @@ def train(rank, gpu, args):
         
     
     #load encoder and decoder
-    '''load encoder and decoder'''
     config_path = args.AutoEncoder_config 
     ckpt_path = args.AutoEncoder_ckpt 
     
-    if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
+    if args.dataset in ['cifar10', 'stl10'] or True:
 
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
@@ -195,17 +181,14 @@ def train(rank, gpu, args):
               .format(checkpoint['epoch']))
     else:
         global_step, epoch, init_epoch = 0, 0, 0
-        
+
     '''Sigmoid learning parameter'''
     gamma = 6
     beta = np.linspace(-gamma, gamma, args.num_epoch+1)
     alpha = 1 - 1 / (1+np.exp(-beta))
+
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
-
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
 
         for iteration, (x, y) in enumerate(data_loader):
             for p in netD.parameters():
@@ -219,18 +202,15 @@ def train(rank, gpu, args):
             x0 = x.to(device, non_blocking=True)
 
             """################# Change here: Encoder #################"""
-
             with torch.no_grad():
                 posterior = AutoEncoder.encode(x0)
-                #posterior = posterior[0]
-                #print(posterior)
-                #print(posterior.shape, posterior.max(), posterior.min())
                 real_data = posterior.detach()
-            real_data = real_data / args.scale_factor #300.0  # [-1, 1]
             #print("MIN:{}, MAX:{}".format(real_data.min(), real_data.max()))
+            real_data = real_data / args.scale_factor #300.0  # [-1, 1]
             
-            assert -1 <= real_data.min() < 0
-            assert 0 < real_data.max() <= 1
+            
+            #assert -1 <= real_data.min() < 0
+            #assert 0 < real_data.max() <= 1
             """################# End change: Encoder #################"""
             # sample t
             t = torch.randint(0, args.num_timesteps,
@@ -293,8 +273,7 @@ def train(rank, gpu, args):
             elif args.rec_loss and not args.sigmoid_learning:
                 rec_loss = F.l1_loss(x_0_predict, real_data)
                 errG = errG + rec_loss
-
-
+            
 
             errG.backward()
             optimizerG.step()
@@ -302,9 +281,6 @@ def train(rank, gpu, args):
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
-                    end.record()
-                    torch.cuda.synchronize()
-                    elapsed_time = start.elapsed_time(end)
                     if args.sigmoid_learning:
                         print('epoch {} iteration{}, G Loss: {}, D Loss: {}, alpha: {}'.format(
                             epoch, iteration, errG.item(), errD.item(), alpha[epoch]))
@@ -314,9 +290,6 @@ def train(rank, gpu, args):
                     else:   
                         print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
                             epoch, iteration, errG.item(), errD.item()))
-                    wandb.log({"elapsed_time": elapsed_time / 1000})
-                    start.record()
-            wandb.log({"iteration:": iteration, "G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
 
         if not args.no_lr_decay:
 
@@ -324,38 +297,19 @@ def train(rank, gpu, args):
             schedulerD.step()
 
         if rank == 0:
-            if epoch % 10 == 0:
-                x_pos_sample = x_pos_sample[:, :3]
-                torchvision.utils.save_image(x_pos_sample, os.path.join(
-                    exp_path, 'xpos_epoch_{}.png'.format(epoch)), normalize=True)
-
+            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
             ########################################
             x_t_1 = torch.randn_like(posterior)
             fake_sample = sample_from_model(
                 pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 
             """############## CHANGE HERE: DECODER ##############"""
-            """
-            fake_sample *= 2
-            real_data *= 2
-            if not args.use_pytorch_wavelet:
-                fake_sample = iwt(
-                    fake_sample[:, :3], fake_sample[:, 3:6], fake_sample[:, 6:9], fake_sample[:, 9:12])
-                real_data = iwt(
-                    real_data[:, :3], real_data[:, 3:6], real_data[:, 6:9], real_data[:, 9:12])
-            else:
-                fake_sample = iwt((fake_sample[:, :3], [torch.stack(
-                    (fake_sample[:, 3:6], fake_sample[:, 6:9], fake_sample[:, 9:12]), dim=2)]))
-                real_data = iwt((real_data[:, :3], [torch.stack(
-                    (real_data[:, 3:6], real_data[:, 6:9], real_data[:, 9:12]), dim=2)]))
-            """
             fake_sample *= args.scale_factor #300
             real_data *= args.scale_factor #300
             with torch.no_grad():
                 fake_sample = AutoEncoder.decode(fake_sample)
                 real_data = AutoEncoder.decode(real_data)
-
-            #rec_data = (torch.clamp(rec_data, -1, 1) + 1) / 2 
+            
             fake_sample = (torch.clamp(fake_sample, -1, 1) + 1) / 2  # 0-1
             real_data = (torch.clamp(real_data, -1, 1) + 1) / 2  # 0-1 
             
@@ -365,8 +319,6 @@ def train(rank, gpu, args):
                 exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)))
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
-            #torchvision.utils.save_image(
-            #    rec_data, os.path.join(exp_path, 'rec_data.png'))
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
@@ -389,7 +341,6 @@ def train(rank, gpu, args):
                         store_params_in_ema=True)
 
 
-# %%
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('ddgan parameters')
     parser.add_argument('--seed', type=int, default=1024,
@@ -525,6 +476,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--AutoEncoder_ckpt', default='./autoencoder/weight/last_big.ckpt', help='path of weight for AntoEncoder')
     parser.add_argument("--sigmoid_learning", action="store_true")
+    parser.add_argument("--class_conditional", action="store_true", default=False)
     args = parser.parse_args()
 
     args.world_size = args.num_proc_node * args.num_process_per_node

@@ -1,5 +1,5 @@
 #!/bin/sh
-export MASTER_PORT=6038
+export MASTER_PORT=6039
 echo MASTER_PORT=${MASTER_PORT}
 
 export PYTHONPATH=$(pwd):$PYTHONPATH
@@ -22,8 +22,8 @@ if [[ $MODE == train ]]; then
 	echo "==> Training IDDGAN"
 
 	if [[ $DATASET == cifar10 ]]; then
-		python3 train_iddgan.py --dataset cifar10 --exp sample --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
-			--num_res_blocks 2 --batch_size 256 --num_epoch 2000 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+		python3 train_iddgan_dit.py --dataset cifar10 --exp cifar10-fix-loss --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
 			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
 			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
@@ -32,6 +32,33 @@ if [[ $MODE == train ]]; then
 			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
 			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
 			--rec_loss \
+			--sigmoid_learning
+
+	elif [[ $DATASET == cifar10_bCR ]]; then
+            python3 train_iddgan_bCR.py --dataset cifar10_no_transform --exp cifar10-bCR-test-9 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.0e-4 --lr_g 2.0e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning
+    
+    elif [[ $DATASET == cifar10_bCR_hinge ]]; then
+            python3 train_iddgan_bCR.py --dataset cifar10_no_transform --exp cifar10-bCR-fix-hinge --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+            --loss_type hinge \
 			--sigmoid_learning
 
 	elif [[ $DATASET == cifar10_cond ]]; then
@@ -189,15 +216,28 @@ if [[ $MODE == train ]]; then
 			--master_port $MASTER_PORT --num_process_per_node $GPUS \
 			--current_resolution 64 --attn_resolution 16 --num_disc_layers 4 --rec_loss \
 			--save_content_every 5 \
-			--AutoEncoder_config ./autoencoder/config/CELEBA_config.yaml \
-			--AutoEncoder_ckpt ./autoencoder/weight/CELEBA_weight.ckpt \
+			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
+			--scale_factor 6.0 \
+			--no_lr_decay \
+			--sigmoid_learning 
+    
+    elif [[ $DATASET == celeba_256_bCR ]]; then
+		python3 train_iddgan_celeba_bCR.py --dataset celeba_256 --image_size 256 --exp vq-f4-256-bCR --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \
+			--num_res_blocks 2 --batch_size 32 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+			--nz 100 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/celeba/celeba-lmdb/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 64 --attn_resolution 16 --num_disc_layers 4 --rec_loss \
+			--save_content_every 5 \
+			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
 			--scale_factor 6.0 \
 			--no_lr_decay \
 			--sigmoid_learning 
 
 	elif [[ $DATASET == lsun ]]; then
 		python3 train_iddgan.py --dataset lsun --image_size 256 --exp g12222_128_2block_d4_attn16_nz50_tanh --num_channels 4 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \
-			--num_res_blocks 3 --batch_size 8 --num_epoch 1000 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 1. \
+			--num_res_blocks 3 --batch_size 32 --num_epoch 4000 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 1. \
 			--nz 50 --z_emb_dim 256 --lr_d 1e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/lsun/ \
 			--master_port $MASTER_PORT --num_process_per_node $GPUS \
 			--current_resolution 32 --attn_resolution 16 --num_disc_layers 4  \
@@ -207,6 +247,32 @@ if [[ $MODE == train ]]; then
 			--scale_factor 60.0 \
 			--sigmoid_learning \
 			--no_lr_decay 
+    
+    elif [[ $DATASET == lsun_bCR_kl ]]; then
+		python3 train_iddgan_bCR.py --dataset lsun_no_transform --image_size 256 --exp kl-f8-256-bCR --num_channels 4 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \
+			--num_res_blocks 3 --batch_size 32 --num_epoch 4000 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 1. \
+			--nz 50 --z_emb_dim 256 --lr_d 1e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/lsun/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 1\
+			--current_resolution 32 --attn_resolution 16 --num_disc_layers 4  \
+			--save_content_every 1 \
+			--AutoEncoder_config ./autoencoder/config/kl-f8.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/kl-f8.ckpt \
+			--scale_factor 60.0 \
+			--sigmoid_learning \
+			--no_lr_decay 
+    
+    elif [[ $DATASET == lsun_bCR_vq ]]; then
+		python3 train_iddgan_celeba_bCR.py --dataset lsun_no_transform --image_size 256 --exp vq-f8-256-bCR --num_channels 4 \
+        --num_channels_dae 128 --num_timesteps 4 --num_res_blocks 3 --batch_size 8 --num_epoch 1000 --ngf 64 \
+        --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 1. \
+        --lr_d 1.0e-4 --lr_g 2.0e-4 --lazy_reg 10 --ch_mult 1 2 2 2 --save_content --datadir data/lsun/ \
+        --master_port 6088 --num_process_per_node 1 --save_content_every 1 \
+        --current_resolution 32 --attn_resolutions 16 --num_disc_layers 4 \
+        --scale_factor 60.0 --no_lr_decay \
+        --AutoEncoder_config autoencoder/config/vq-f8.yaml \
+        --AutoEncoder_ckpt autoencoder/weight/vq-f8.ckpt \
+        --rec_loss \
+        --sigmoid_learning
 	fi
 
 else
