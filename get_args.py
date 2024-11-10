@@ -1,4 +1,5 @@
 import argparse
+from models import DiT_models
 
 def get_args(args = []):
     parser = argparse.ArgumentParser('ddgan parameters')
@@ -139,6 +140,8 @@ def get_args(args = []):
     # bCRのハイパーパラメータを追加
     parser.add_argument('--lambda_fake', type=float, default=10.0, help='bCR regularization strength for fake images')
     parser.add_argument('--lambda_real', type=float, default=10.0, help='bCR regularization strength for real images')
+    
+    parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
     
     args = parser.parse_args(args)
 

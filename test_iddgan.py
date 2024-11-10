@@ -42,9 +42,11 @@ def sample_and_test(args):
         args.dataset, args.exp, args.epoch_id), map_location=device)
 
     # DDPで学習したら以下を適用する
+    # DDPで学習したら以下を適用する
     # loading weights from ddp in single gpu
-    #for key in list(ckpt.keys()):
-    #    ckpt[key[7:]] = ckpt.pop(key)
+    if not args.no_ddp:
+        for key in list(ckpt.keys()):
+            ckpt[key[7:]] = ckpt.pop(key)
 
     netG.load_state_dict(ckpt, strict=False)
     netG.eval()
@@ -85,6 +87,7 @@ def sample_and_test(args):
     iters_needed = 50000 // args.batch_size
 
     save_dir = "./wddgan_generated_samples/{}/{}/{}".format(args.dataset, args.exp, args.epoch_id)
+    save_dir = "./wddgan_generated_samples/{}/{}/{}".format(args.dataset, args.exp, args.epoch_id)
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     
@@ -98,6 +101,9 @@ def sample_and_test(args):
         kwargs = {'batch_size': 100, 'device': device, 'dims': 2048}
         fid = calculate_fid_given_paths(paths=paths, **kwargs)
         print('dataset: {}, exp: {}, epoch: {}, FID: {}'.format(args.dataset, args.exp, args.epoch_id, fid))
+        with open('./saved_info/{}/{}/{}-fid-{:.3f}.text'.format(args.dataset, args.exp, args.epoch_id , fid), "w", encoding="utf-8") as f:
+            f.write(str(fid))
+        
 
     if args.measure_time:
         x_t_1 = torch.randn(args.batch_size, args.num_channels,
@@ -172,6 +178,7 @@ def sample_and_test(args):
                     torchvision.utils.save_image(
                         x, '{}/{}.jpg'.format(save_dir, index))
                 #print('generating batch ', i)
+                #print('generating batch ', i)
 
         paths = [save_dir, real_img_dir]
         print(paths)
@@ -180,6 +187,8 @@ def sample_and_test(args):
         fid = calculate_fid_given_paths(paths=paths, **kwargs)
         #print('FID = {}'.format(fid))
         print('dataset: {}, exp: {}, epoch: {}, FID: {}'.format(args.dataset, args.exp, args.epoch_id, fid))
+        with open('./saved_info/{}/{}/{}-fid-{:.3f}.text'.format(args.dataset, args.exp, args.epoch_id , fid), "w", encoding="utf-8") as f:
+            f.write(str(fid))
     else:
         x_t_1 = torch.randn(args.batch_size, args.num_channels,
                             args.image_size, args.image_size).to(device)
@@ -301,6 +310,7 @@ if __name__ == '__main__':
     parser.add_argument('--class_conditional', action='store_true', default=False)
 
     parser.add_argument('--fid_only', action='store_true', default=False)
+    parser.add_argument('--no-ddp',  action='store_true', default=False)
     args = parser.parse_args()
 
     sample_and_test(args)

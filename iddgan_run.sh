@@ -7,8 +7,8 @@ export PYTHONPATH=$(pwd):$PYTHONPATH
 CURDIR=$(cd $(dirname $0); pwd)
 echo 'The work dir is: ' $CURDIR
 
-DATASET=$1
-MODE=$2
+MODE=$1
+DATASET=$2
 GPUS=$3
 
 if [ -z "$1" ]; then
@@ -186,8 +186,24 @@ if [[ $MODE == train ]]; then
 	elif [[ $DATASET == afhq-cat-256-kl-f2-feature ]]; then
 		python3 train_iddgan_feature.py --dataset afhq_cat --image_size 256 --exp cat-256-kl-f2-feature --num_channels 4 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 16 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+		python3 train_iddgan_lab.py --dataset afhq_cat --image_size 256 --exp cat-256-kl-f2 --num_channels 4 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 16 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
 			--nz 50 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/afhq \
 			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 128 --attn_resolution 32 --num_disc_layers 4 --rec_loss \
+			--save_content_every 1 \
+			--AutoEncoder_config ./autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/kl-f2.ckpt \
+			--scale_factor 6.0 \
+			--no_lr_decay \
+			--sigmoid_learning
+	
+	elif [[ $DATASET == afhq-cat-256-kl-f2-feature ]]; then
+		python3 train_iddgan_feature.py --dataset afhq_cat --image_size 256 --exp cat-256-kl-f2-feature --num_channels 4 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 16 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+			--nz 50 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/afhq \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 128 --attn_resolution 32 --num_disc_layers 4 --rec_loss \
 			--current_resolution 128 --attn_resolution 32 --num_disc_layers 4 --rec_loss \
 			--save_content_every 1 \
 			--AutoEncoder_config ./autoencoder/config/kl-f2.yaml \
@@ -280,12 +296,21 @@ else
 	if [[ $DATASET == cifar10 ]]; then
 		python3 test_iddgan.py --dataset cifar10 --exp kl-f2-4 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --nz 50 --z_emb_dim 256 --n_mlp 4 --ch_mult 1 2 2 --epoch_id 1300 \
+		python3 test_iddgan.py --dataset cifar10 --exp kl-f2-4 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --nz 50 --z_emb_dim 256 --n_mlp 4 --ch_mult 1 2 2 --epoch_id 1300 \
 			--image_size 32 --current_resolution 16 --attn_resolutions 32 \
 			--scale_factor 105.0 \
 			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
 			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
-			--batch_size 250 \
-			--fid_only --real_img_dir pytorch_fid/cifar10_train_stat.npy 
+            --batch_size 250 \
+            --fid_only --real_img_dir pytorch_fid/cifar10_train_stat.npy
+    
+    elif [[ $DATASET == cifar10-fid-only ]]; then
+		python3 test_iddgan.py --dataset cifar10 --exp kl-f2-3 --epoch_id 1825 --num_channels 4 \
+			--num_channels_dae 128 --num_timesteps 4 --num_res_blocks 2 --nz 50 --z_emb_dim 256 \
+			--n_mlp 4 --ch_mult 1 2 2 --image_size 32 --current_resolution 16 --attn_resolutions 32 \
+			--scale_factor 105.0 --AutoEncoder_config autoencoder/config/kl-f2.yaml --AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--batch_size 250 --fid_only --real_img_dir pytorch_fid/cifar10_train_stat.npy
 
 	elif [[ $DATASET == cifar10_cond ]]; then
 		python3 test_iddgan.py --dataset cifar10 --exp cifar-10-cond --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
@@ -316,6 +341,17 @@ else
 			--AutoEncoder_config ./autoencoder/config/LSUN_config.yaml \
 			--AutoEncoder_ckpt ./autoencoder/weight/LSUN_weight.ckpt \
 			--scale_factor 60.0 \
+			--batch_size 48
+
+   elif [[ $DATASET == afhq_cat ]]; then
+		python3 test_iddgan.py --dataset afhq_cat --image_size 256 --exp  --num_channels 4 --num_channels_dae 128 \
+			--ch_mult 1 2 2 2  --num_timesteps 4 --num_res_blocks 3  --epoch_id 625 \
+			--current_resolution 32 --attn_resolutions 16 \
+			--compute_fid --compute_fid --real_img_dir pytorch_fid/lsun_church_stat.npy \
+			--AutoEncoder_config ./autoencoder/config/LSUN_config.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/LSUN_weight.ckpt \
+			--scale_factor 60.0 \
+			--batch_size 48
 			--batch_size 48
 
    elif [[ $DATASET == afhq_cat ]]; then

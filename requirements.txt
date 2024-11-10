@@ -8,3 +8,17 @@ ninja
 einops
 PyWavelets
 OmegaConf
+
+ftfy
+regex
+tqdm
+cython
+huggingface-hub
+pycocotools
+pytorch-lightning==1.7.7
+diffusers
+transformers
+kornia
+wandb
+accelerate
+torchmetrics==0.11.4
