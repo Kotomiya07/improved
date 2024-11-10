@@ -19,6 +19,13 @@ def create_dataset(args):
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]), download=True)
+
+    elif args.dataset == 'cifar10_no_transform':
+        dataset = CIFAR10(args.datadir, train=True, transform=transforms.Compose([
+            transforms.Resize(32),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]), download=True)
+
     elif args.dataset == 'stl10':
         dataset = STL10(args.datadir, split="unlabeled", transform=transforms.Compose([
                         transforms.Resize(64),
@@ -54,12 +61,64 @@ def create_dataset(args):
         subset = list(range(0, 120000))
         dataset = torch.utils.data.Subset(train_data, subset)
 
+    elif args.dataset == 'lsun_no_transform':
+
+        train_transform = transforms.Compose([
+            transforms.Resize(args.image_size),
+            transforms.CenterCrop(args.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ])
+
+        train_data = LSUN(root=args.datadir, classes=[
+                          'church_outdoor_train'], transform=train_transform)
+        subset = list(range(0, 120000))
+        dataset = torch.utils.data.Subset(train_data, subset)
+    
+    elif args.dataset == 'celeba_32':
+        train_transform = transforms.Compose([
+            transforms.Resize(args.image_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+        dataset = LMDBDataset(root=args.datadir, name='celeba',
+                              train=True, transform=train_transform)
+
+    elif args.dataset == 'celeba_64':
+        train_transform = transforms.Compose([
+            transforms.Resize(args.image_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+        dataset = LMDBDataset(root=args.datadir, name='celeba',
+                              train=True, transform=train_transform)
+
+    elif args.dataset == 'celeba_128':
+        train_transform = transforms.Compose([
+            transforms.Resize(args.image_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+        dataset = LMDBDataset(root=args.datadir, name='celeba',
+                              train=True, transform=train_transform)
+
     elif args.dataset == 'celeba_256':
         train_transform = transforms.Compose([
             transforms.Resize(args.image_size),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+        dataset = LMDBDataset(root=args.datadir, name='celeba',
+                              train=True, transform=train_transform)
+    elif args.dataset == 'celeba_256_no_transform':
+        train_transform = transforms.Compose([
+            transforms.Resize(args.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
         ])
         dataset = LMDBDataset(root=args.datadir, name='celeba',
                               train=True, transform=train_transform)
