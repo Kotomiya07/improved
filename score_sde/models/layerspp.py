@@ -126,7 +126,7 @@ class AttnBlockpp(nn.Module):
             return x + h
         else:
             return (x + h) / np.sqrt(2.)
-
+        
 
 class Upsample(nn.Module):
     def __init__(self, in_ch=None, out_ch=None, with_conv=False, fir=False,
@@ -481,6 +481,194 @@ class ResnetBlockBigGANpp_Adagn_one(nn.Module):
         if temb is not None:
             h += self.Dense_0(self.act(temb))[:, :, None, None]
         h = self.act(self.GroupNorm_1(h))
+        h = self.Dropout_0(h)
+        h = self.Conv_1(h)
+
+        if self.in_ch != self.out_ch or self.up or self.down:
+            x = self.Conv_2(x)
+
+        if not self.skip_rescale:
+            return x + h
+        else:
+            return (x + h) / np.sqrt(2.)
+
+
+
+from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+
+
+def modulate(x, shift, scale):
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+class DiTBlock(nn.Module):
+    """
+    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    """
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+        )
+
+    def forward(self, x, c):
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        return x
+
+class FinalLayer(nn.Module):
+    """
+    The final layer of DiT.
+    """
+    def __init__(self, hidden_size, patch_size, out_channels):
+        super().__init__()
+        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 2 * hidden_size, bias=True)
+        )
+
+    def forward(self, x, c):
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
+        x = modulate(self.norm_final(x), shift, scale)
+        x = self.linear(x)
+        return x
+
+    
+class ResnetBlockBigGANpp_Adagn_with_DiT(nn.Module):
+    def __init__(self, act, in_ch, out_ch=None, temb_dim=None, zemb_dim=None, up=False, down=False,
+                 dropout=0.1, fir=False, fir_kernel=(1, 3, 3, 1),
+                 skip_rescale=True, init_scale=0., 
+                 size=16, num_heads=8, depth=1, hidden_size=256, mlp_ratio=4.0):
+        super().__init__()
+
+        out_ch = out_ch if out_ch else in_ch
+        self.GroupNorm_0 = AdaptiveGroupNorm(
+            min(in_ch // 4, 32), in_ch, zemb_dim)
+
+        self.up = up
+        self.down = down
+        self.fir = fir
+        self.fir_kernel = fir_kernel
+
+        self.Conv_0 = conv3x3(in_ch, out_ch)
+        if temb_dim is not None:
+            self.Dense_0 = nn.Linear(temb_dim, out_ch)
+            self.Dense_0.weight.data = default_init()(self.Dense_0.weight.shape)
+            nn.init.zeros_(self.Dense_0.bias)
+
+        self.GroupNorm_1 = AdaptiveGroupNorm(
+            min(out_ch // 4, 32), out_ch, zemb_dim)
+        self.Dropout_0 = nn.Dropout(dropout)
+        self.Conv_1 = conv3x3(out_ch, out_ch, init_scale=init_scale)
+        if in_ch != out_ch or up or down:
+            self.Conv_2 = conv1x1(in_ch, out_ch)
+
+        self.skip_rescale = skip_rescale
+        self.act = act
+        self.in_ch = in_ch
+        self.out_ch = out_ch
+
+
+        self.x_embedder = PatchEmbed(size, 2, in_ch, zemb_dim, bias=True)
+        # Initialize the DiTBlock if provided
+        self.blocks = nn.ModuleList([
+            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+        ])
+        self.final_layer = FinalLayer(zemb_dim, 2, self.in_ch)
+        #self.initialize_weights()
+    
+    def initialize_weights(self):
+        # Initialize transformer layers:
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+        self.apply(_basic_init)
+
+        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
+        w = self.x_embedder.proj.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.constant_(self.x_embedder.proj.bias, 0)
+
+        # Zero-out adaLN modulation layers in DiT blocks:
+        for block in self.blocks:
+            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+
+        # Zero-out output layers:
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        nn.init.constant_(self.final_layer.linear.weight, 0)
+        nn.init.constant_(self.final_layer.linear.bias, 0)
+
+    def unpatchify(self, x):
+        """
+        x: (N, T, patch_size**2 * C)
+        imgs: (N, H, W, C)
+        """
+        c = self.in_ch
+        p = 2
+        h = w = int(x.shape[1] ** 0.5)
+        assert h * w == x.shape[1]
+
+        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
+        x = torch.einsum('nhwpqc->nchpwq', x)
+        imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
+        return imgs
+    
+    def ckpt_wrapper(self, module):
+        def ckpt_forward(*inputs):
+            outputs = module(*inputs)
+            return outputs
+        return ckpt_forward
+
+    def forward(self, x, temb=None, zemb=None):
+        h = self.act(self.GroupNorm_0(x, zemb))
+
+        # Apply the DiTBlock here if it's provided
+        if self.blocks is not None:
+            h = self.x_embedder(h)
+            for block in self.blocks:
+                h = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), h, zemb)
+            h = self.final_layer(h, zemb)
+            h = self.unpatchify(h)
+            
+
+        # Apply convolution
+        if self.up:
+            if self.fir:
+                h = up_or_down_sampling.upsample_2d(
+                    h, self.fir_kernel, factor=2)
+                x = up_or_down_sampling.upsample_2d(
+                    x, self.fir_kernel, factor=2)
+            else:
+                h = up_or_down_sampling.naive_upsample_2d(h, factor=2)
+                x = up_or_down_sampling.naive_upsample_2d(x, factor=2)
+        elif self.down:
+            if self.fir:
+                h = up_or_down_sampling.downsample_2d(
+                    h, self.fir_kernel, factor=2)
+                x = up_or_down_sampling.downsample_2d(
+                    x, self.fir_kernel, factor=2)
+            else:
+                h = up_or_down_sampling.naive_downsample_2d(h, factor=2)
+                x = up_or_down_sampling.naive_downsample_2d(x, factor=2)
+
+        h = self.Conv_0(h)
+        # Add bias to each feature map conditioned on the time embedding
+        if temb is not None:
+            h += self.Dense_0(self.act(temb))[:, :, None, None]
+        h = self.act(self.GroupNorm_1(h, zemb))
         h = self.Dropout_0(h)
         h = self.Conv_1(h)
 
