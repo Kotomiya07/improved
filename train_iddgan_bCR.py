@@ -140,15 +140,15 @@ def train(rank, gpu, args):
     nz = args.nz  # latent dimension
 
     dataset = create_dataset(args)
-    #train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-    #                                                                num_replicas=args.world_size,
-    #                                                                rank=rank)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
+                                                                    num_replicas=args.world_size,
+                                                                    rank=rank)
     data_loader = torch.utils.data.DataLoader(dataset,
                                               batch_size=batch_size,
-                                              shuffle=True,
+                                              shuffle=False,
                                               num_workers=args.num_workers,
                                               pin_memory=True,
-                                              #sampler=train_sampler,
+                                              sampler=train_sampler,
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
@@ -167,8 +167,8 @@ def train(rank, gpu, args):
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
 
-    #broadcast_params(netG.parameters())
-    #broadcast_params(netD.parameters())
+    broadcast_params(netG.parameters())
+    broadcast_params(netD.parameters())
 
     optimizerD = optim.Adam(filter(lambda p: p.requires_grad, netD.parameters(
     )), lr=args.lr_d, betas=(args.beta1, args.beta2))
@@ -284,7 +284,7 @@ def train(rank, gpu, args):
     ema.eval()
 
     for epoch in range(init_epoch, args.num_epoch + 1):
-        #train_sampler.set_epoch(epoch)
+        train_sampler.set_epoch(epoch)
 
         for iteration, (x, y) in enumerate(data_loader):
             requires_grad(netD)
@@ -356,6 +356,7 @@ def train(rank, gpu, args):
 
 
             errD = consistency_loss
+            torch.nn.utils.clip_grad_norm_(netD.parameters(), 0.5)
             # Update D
             optimizerD.step()
 
@@ -389,6 +390,7 @@ def train(rank, gpu, args):
             errG = errG.mean()
             optimizerG.zero_grad()
             errG.backward()
+            torch.nn.utils.clip_grad_norm_(netG.parameters(), 0.5)
             optimizerG.step()
             
             
@@ -441,20 +443,24 @@ def train(rank, gpu, args):
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'netG_dict': netG.state_dict(), 'optimizerG': optimizerG.state_dict(),
                                'schedulerG': schedulerG.state_dict(), 'netD_dict': netD.state_dict(),
-                               'optimizerD': optimizerD.state_dict(), 'schedulerD': schedulerD.state_dict()}
+                               'optimizerD': optimizerD.state_dict(), 'schedulerD': schedulerD.state_dict(),
+                               'ema': ema.state_dict()}
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
-                update_ema(ema, netG)
                 #if args.use_ema:
                 #    optimizerG.swap_parameters_with_ema(
                 #        store_params_in_ema=True)
+                if args.use_ema:
+                    update_ema(ema, netG, decay=args.ema_decay)
 
                 torch.save(netG.state_dict(), os.path.join(
                     exp_path, 'netG_{}.pth'.format(epoch)))
                 #if args.use_ema:
                 #    optimizerG.swap_parameters_with_ema(
                 #        store_params_in_ema=True)
+                if args.use_ema:
+                    update_ema(ema, netG, decay=0)
 
 
 if __name__ == '__main__':
@@ -655,6 +661,6 @@ if __name__ == '__main__':
                 "sigmoid_learning": args.sigmoid_learning,
             }
         )
-        #init_processes(0, size, train, args)
-        train(0, 0, args)
+        init_processes(0, size, train, args)
+        #train(0, 0, args)
         

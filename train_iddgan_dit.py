@@ -158,6 +158,7 @@ def train(rank, gpu, args):
     disc_net = [Discriminator_small, Discriminator_large]
     print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = gen_net(args).to(device)
+    #netG = torch.compile(netG)
 
     if args.dataset in ['cifar10', 'stl10']:
         netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
@@ -284,14 +285,21 @@ def train(rank, gpu, args):
     update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
     ema.eval()
 
-   for epoch in range(init_epoch, args.num_epoch + 1):
+    for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
 
         for iteration, (x, y) in enumerate(data_loader):
-            requires_grad(netD)
+            #optimizerD.zero_grad()
+            #optimizerG.zero_grad()
+
+            #requires_grad(netD)
+            for p in netD.parameters():
+                p.requires_grad = True
             netD.zero_grad()
 
-            requires_grad(netG, flag=False)
+            #requires_grad(netG, flag=False)
+            for p in netG.parameters():
+                p.requires_grad = False
 
             # sample from p(x_0)
             x0 = x.to(device, non_blocking=True)
@@ -316,9 +324,8 @@ def train(rank, gpu, args):
 
             # train with real
             D_real = netD(x_t, t, x_tp1.detach()).view(-1)
-            #errD_real = F.softplus(-D_real).mean()
-            errF_real = loss(D_real, "disc_real")
-            
+            errD_real = F.softplus(-D_real).mean()
+            #errD_real = loss(D_real, "disc_real").mean()
             
             errD_real.backward(retain_graph=True)
 
@@ -334,20 +341,26 @@ def train(rank, gpu, args):
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            #errD_fake = F.softplus(output).mean()
-            errF_fake = loss(output, "disc_fake")
+            errD_fake = F.softplus(output).mean()
+            #errD_fake = loss(output, "disc_fake").mean()
             
-            #optimizerD.zero_grad()
             errD_fake.backward()
+
+            torch.nn.utils.clip_grad_norm_(netD.parameters(), 0.5)
 
             errD = errD_real + errD_fake
             # Update D
             optimizerD.step()
 
             # update G
-            requires_grad(netD, flag=False)
+            #requires_grad(netD, flag=False)
 
-            requires_grad(netG)
+            #requires_grad(netG)
+            for p in netD.parameters():
+                p.requires_grad = False
+
+            for p in netG.parameters():
+                p.requires_grad = True
             netG.zero_grad()
 
             t = torch.randint(0, args.num_timesteps,
@@ -359,8 +372,8 @@ def train(rank, gpu, args):
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            #errG = F.softplus(-output).mean()
-            errG = loss(output, "gen")
+            errG = F.softplus(-output).mean()
+            #errG = loss(output, "gen").mean()
 
             # reconstructior loss
             if args.sigmoid_learning and args.rec_loss:
@@ -375,8 +388,8 @@ def train(rank, gpu, args):
             
             #optimizerG.zero_grad()
             errG.backward()
+            torch.nn.utils.clip_grad_norm_(netG.parameters(), 0.5)
             optimizerG.step()
-            update_ema(ema, netG)
 
             global_step += 1
             if iteration % 100 == 0:
@@ -426,19 +439,24 @@ def train(rank, gpu, args):
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'netG_dict': netG.state_dict(), 'optimizerG': optimizerG.state_dict(),
                                'schedulerG': schedulerG.state_dict(), 'netD_dict': netD.state_dict(),
-                               'optimizerD': optimizerD.state_dict(), 'schedulerD': schedulerD.state_dict()}
+                               'optimizerD': optimizerD.state_dict(), 'schedulerD': schedulerD.state_dict(),
+                               'ema': ema.state_dict()}
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
                 #if args.use_ema:
                 #    optimizerG.swap_parameters_with_ema(
                 #        store_params_in_ema=True)
+                if args.use_ema:
+                    update_ema(ema, netG, decay=args.ema_decay)
 
                 torch.save(netG.state_dict(), os.path.join(
                     exp_path, 'netG_{}.pth'.format(epoch)))
                 #if args.use_ema:
                 #    optimizerG.swap_parameters_with_ema(
                 #        store_params_in_ema=True)
+                if args.use_ema:
+                    update_ema(ema, netG, decay=0)
 
 
 if __name__ == '__main__':

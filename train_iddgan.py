@@ -23,6 +23,7 @@ from omegaconf import OmegaConf
 import wandb
 from copy import deepcopy
 from collections import OrderedDict
+from PIL import Image as PILImage
 
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
@@ -69,7 +70,7 @@ def grad_penalty_call(args, D_real, x_t):
     ).mean()
 
     grad_penalty = args.r1_gamma / 2 * grad_penalty
-    grad_penalty.backward()
+    return grad_penalty
 
 
 # %%
@@ -88,15 +89,15 @@ def train(rank, gpu, args):
     nz = args.nz  # latent dimension
 
     dataset = create_dataset(args)
-    #train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-    #                                                                num_replicas=args.world_size,
-    #                                                                rank=rank)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
+                                                                    num_replicas=args.world_size,
+                                                                    rank=rank)
     data_loader = torch.utils.data.DataLoader(dataset,
                                               batch_size=batch_size,
-                                              shuffle=True,                 # fix
+                                              shuffle=False,
                                               num_workers=args.num_workers,
                                               pin_memory=True,
-                                              #sampler=train_sampler,
+                                              sampler=train_sampler,
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
@@ -115,19 +116,19 @@ def train(rank, gpu, args):
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
 
-    #broadcast_params(netG.parameters())
-    #broadcast_params(netD.parameters())
+    broadcast_params(netG.parameters())
+    broadcast_params(netD.parameters())
 
     optimizerD = optim.Adam(filter(lambda p: p.requires_grad, netD.parameters(
     )), lr=args.lr_d, betas=(args.beta1, args.beta2))
     optimizerG = optim.Adam(filter(lambda p: p.requires_grad, netG.parameters(
     )), lr=args.lr_g, betas=(args.beta1, args.beta2))
 
-    #if args.use_ema:
-    #    optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
+    if args.use_ema:
+        optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
     
-    ema = deepcopy(netG).to(device)  # Create an EMA of the model for use after training
-    requires_grad(ema, False)
+    #ema = deepcopy(netG).to(device)  # Create an EMA of the model for use after training
+    #requires_grad(ema, False)
 
     schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizerG, args.num_epoch, eta_min=1e-5)
@@ -135,9 +136,9 @@ def train(rank, gpu, args):
         optimizerD, args.num_epoch, eta_min=1e-5)
 
     # ddp
-    #netG = nn.parallel.DistributedDataParallel(
-    #    netG, device_ids=[gpu], find_unused_parameters=True)
-    #netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
+    netG = nn.parallel.DistributedDataParallel(
+        netG, device_ids=[gpu], find_unused_parameters=True)
+    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     """############### DELETE TO AVOID ERROR ###############"""
     # Wavelet Pooling
@@ -212,17 +213,26 @@ def train(rank, gpu, args):
     beta = np.linspace(-gamma, gamma, args.num_epoch+1)
     alpha = 1 - 1 / (1+np.exp(-beta))
     
-    update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
-    ema.eval()
+    #update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
+    #ema.eval()
+
+    print(f"AutoEncoder Parameters: {sum(p.numel() for p in AutoEncoder.parameters()):,}")
+    print(f"Generator Parameters: {sum(p.numel() for p in netG.parameters()):,}")
+    print(f"Discriminator Parameters: {sum(p.numel() for p in netD.parameters()):,}")
+
+    netG._set_static_graph()
+
 
     for epoch in range(init_epoch, args.num_epoch + 1):
-        #train_sampler.set_epoch(epoch)
+        train_sampler.set_epoch(epoch)
 
         for iteration, (x, y) in enumerate(data_loader):
-            requires_grad(netD)
+            for p in netD.parameters():
+                p.requires_grad = True
             netD.zero_grad()
 
-            requires_grad(netG, flag=False)
+            for p in netG.parameters():
+                p.requires_grad = False
 
             # sample from p(x_0)
             x0 = x.to(device, non_blocking=True)
@@ -248,8 +258,7 @@ def train(rank, gpu, args):
             # train with real
             D_real = netD(x_t, t, x_tp1.detach()).view(-1)
             errD_real = F.softplus(-D_real).mean()
-            
-            
+
             errD_real.backward(retain_graph=True)
 
             if args.lazy_reg is None:
@@ -265,8 +274,7 @@ def train(rank, gpu, args):
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             errD_fake = F.softplus(output).mean()
-            
-            #optimizerD.zero_grad()
+
             errD_fake.backward()
 
             errD = errD_real + errD_fake
@@ -274,9 +282,11 @@ def train(rank, gpu, args):
             optimizerD.step()
 
             # update G
-            requires_grad(netD, flag=False)
+            for p in netD.parameters():
+                p.requires_grad = False
 
-            requires_grad(netG)
+            for p in netG.parameters():
+                p.requires_grad = True
             netG.zero_grad()
 
             t = torch.randint(0, args.num_timesteps,
@@ -300,11 +310,9 @@ def train(rank, gpu, args):
                 rec_loss = F.l1_loss(x_0_predict, real_data)
                 errG = errG + rec_loss
             
-            
-            #optimizerG.zero_grad()
+
             errG.backward()
             optimizerG.step()
-            update_ema(ema, netG)
 
             global_step += 1
             if iteration % 100 == 0:
@@ -347,6 +355,9 @@ def train(rank, gpu, args):
                 exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)))
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
+            
+            # TODO: wandbに画像を保存
+            
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
@@ -358,15 +369,15 @@ def train(rank, gpu, args):
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
-                #if args.use_ema:
-                #    optimizerG.swap_parameters_with_ema(
-                #        store_params_in_ema=True)
+                if args.use_ema:
+                    optimizerG.swap_parameters_with_ema(
+                        store_params_in_ema=True)
 
                 torch.save(netG.state_dict(), os.path.join(
                     exp_path, 'netG_{}.pth'.format(epoch)))
-                #if args.use_ema:
-                #    optimizerG.swap_parameters_with_ema(
-                #        store_params_in_ema=True)
+                if args.use_ema:
+                    optimizerG.swap_parameters_with_ema(
+                        store_params_in_ema=True)
 
 # %%
 if __name__ == '__main__':
@@ -514,28 +525,54 @@ if __name__ == '__main__':
     wandb.init(
         project="TEST",
         name=args.exp,
+        # すべてのパラメータをログに記録
         config={
-            "dataset": args.dataset,
+            "seed": args.seed,
             "image_size": args.image_size,
-            "channels": args.num_channels,
-            "channels_dae": args.num_channels_dae,
-            "ch_nult": args.ch_mult,
-            "timesteps": args.num_timesteps,
-            "res_blocks": args.num_res_blocks,
+            "num_channels": args.num_channels,
+            "centered": args.centered,
+            "use_geometric": args.use_geometric,
+            "beta_min": args.beta_min,
+            "beta_max": args.beta_max,
+            "patch_size": args.patch_size,
+            "num_channels_dae": args.num_channels_dae,
+            "n_mlp": args.n_mlp,
+            "ch_mult": args.ch_mult,
+            "num_res_blocks": args.num_res_blocks,
+            "attn_resolutions": args.attn_resolutions,
+            "dropout": args.dropout,
+            "resamp_with_conv": args.resamp_with_conv,
+            "conditional": args.conditional,
+            "fir": args.fir,
+            "fir_kernel": args.fir_kernel,
+            "skip_rescale": args.skip_rescale,
+            "resblock_type": args.resblock_type,
+            "progressive": args.progressive,
+            "progressive_input": args.progressive_input,
+            "progressive_combine": args.progressive_combine,
+            "embedding_type": args.embedding_type,
+            "fourier_scale": args.fourier_scale,
+            "not_use_tanh": args.not_use_tanh,
+            "exp": args.exp,
+            "dataset": args.dataset,
+            "datadir": args.datadir,
             "nz": args.nz,
-            "epochs": args.num_epoch,
+            "num_timesteps": args.num_timesteps,
+            "z_emb_dim": args.z_emb_dim,
+            "t_emb_dim": args.t_emb_dim,
+            "batch_size": args.batch_size,
+            "num_epoch": args.num_epoch,
             "ngf": args.ngf,
             "lr_g": args.lr_g,
             "lr_d": args.lr_d,
-            "batch_size": args.batch_size,
-            "r1_gamma": args.r1_gamma,
-            "lazy_reg": args.lazy_reg,
-            "embedding_type": args.embedding_type,
+            "beta1": args.beta1,
+            "beta2": args.beta2,
+            "no_lr_decay": args.no_lr_decay,
             "use_ema": args.use_ema,
             "ema_decay": args.ema_decay,
-            "no_lr_decay": args.no_lr_decay,
-            "z_emb_dim": args.z_emb_dim,
-            "attn_resolutions": args.attn_resolutions,
+            "r1_gamma": args.r1_gamma,
+            "lazy_reg": args.lazy_reg,
+            "current_resolution": args.current_resolution,
             "use_pytorch_wavelet": args.use_pytorch_wavelet,
             "rec_loss": args.rec_loss,
             "net_type": args.net_type,
@@ -543,10 +580,21 @@ if __name__ == '__main__':
             "no_use_fbn": args.no_use_fbn,
             "no_use_freq": args.no_use_freq,
             "no_use_residual": args.no_use_residual,
+            "save_content": args.save_content,
+            "save_content_every": args.save_content_every,
+            "save_ckpt_every": args.save_ckpt_every,
+            "num_proc_node": args.num_proc_node,
+            "num_process_per_node": args.num_process_per_node,
+            "node_rank": args.node_rank,
+            "local_rank": args.local_rank,
+            "master_address": args.master_address,
+            "master_port": args.master_port,
+            "num_workers": args.num_workers,
             "scale_factor": args.scale_factor,
             "AutoEncoder_config": args.AutoEncoder_config,
             "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
             "sigmoid_learning": args.sigmoid_learning,
+            "class_conditional": args.class_conditional
         }
     )
 
@@ -569,3 +617,4 @@ if __name__ == '__main__':
     else:
         print('starting in debug mode')
         init_processes(0, size, train, args)
+        wandb.finish()

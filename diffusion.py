@@ -161,7 +161,7 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt, class_emb
     x = x_init
     with torch.no_grad():
         for i in reversed(range(n_time)):
-            t = torch.full((x.size(0),), i, dtype=torch.int64).to(x.device)
+            t = torch.full((x.size(0),), i, device=x.device)
 
             t_time = t
             latent_z = torch.randn(x.size(0), opt.nz, device=x.device)
