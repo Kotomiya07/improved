@@ -19,6 +19,7 @@ def init_processes(rank, size, fn, args):
     """ Initialize the distributed environment. """
     os.environ['MASTER_ADDR'] = args.master_address
     os.environ['MASTER_PORT'] = args.master_port
+    os.environ['LOCAL_RANK'] = str(args.local_rank)
     torch.cuda.set_device(args.local_rank)
     gpu = args.local_rank
     dist.init_process_group(

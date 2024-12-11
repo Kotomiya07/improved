@@ -27,6 +27,9 @@ from collections import OrderedDict
 import random
 from models_fix import DiT_models
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 class ProbLoss(nn.Module):
     def __init__(self, opt):
         assert opt["loss_type"] in ["bce", "hinge"]
@@ -127,9 +130,7 @@ def grad_penalty_call(args, D_real, x_t):
 
 
 def train(rank, gpu, args):
-    from EMA import EMA
     from score_sde.models.discriminator import Discriminator_large, Discriminator_small
-    from score_sde.models.ncsnpp_generator_adagn import NCSNpp, WaveletNCSNpp
 
     torch.manual_seed(args.seed + rank)
     torch.cuda.manual_seed(args.seed + rank)
@@ -142,27 +143,25 @@ def train(rank, gpu, args):
     nz = args.nz = batch_size  # latent dimension
 
     dataset = create_dataset(args)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-                                                                    num_replicas=args.world_size,
-                                                                    rank=rank)
+    #train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
+    #                                                                num_replicas=args.world_size,
+    #                                                                rank=rank)
     data_loader = torch.utils.data.DataLoader(dataset,
                                               batch_size=batch_size,
-                                              shuffle=False,
+                                              shuffle=True,
                                               num_workers=args.num_workers,
                                               pin_memory=True,
-                                              sampler=train_sampler,
+    #                                          sampler=train_sampler,
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
-    G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
-    gen_net = G_NET_ZOO[args.net_type]
     disc_net = [Discriminator_small, Discriminator_large]
-    print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = DiT_models[args.model](
         input_size=args.image_size,
         in_channels=args.num_channels,
     ).to(device)
-    
+
+
     if args.dataset in ['cifar10', 'stl10']:
         netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
                            t_emb_dim=args.t_emb_dim,
@@ -172,8 +171,8 @@ def train(rank, gpu, args):
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
 
-    broadcast_params(netG.parameters())
-    broadcast_params(netD.parameters())
+    #broadcast_params(netG.parameters())
+    #broadcast_params(netD.parameters())
 
     optimizerD = optim.Adam(filter(lambda p: p.requires_grad, netD.parameters(
     )), lr=args.lr_d, betas=(args.beta1, args.beta2))
@@ -192,8 +191,8 @@ def train(rank, gpu, args):
         optimizerD, args.num_epoch, eta_min=1e-5)
 
     # ddp
-    netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
-    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
+    #netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
+    #netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     """############### DELETE TO AVOID ERROR ###############"""
     # Wavelet Pooling
@@ -283,17 +282,24 @@ def train(rank, gpu, args):
     print(f"Discriminator Parameters: {sum(p.numel() for p in netD.parameters()):,}")
 
     loss = ProbLoss({"device":device, "batch_size":args.batch_size, "loss_type":args.loss_type})
-    loss_mse = nn.MSELoss()
     
     update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
     ema.eval()
 
-    for epoch in range(init_epoch, args.num_epoch + 1):
-        train_sampler.set_epoch(epoch)
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
 
+    start_epoch = torch.cuda.Event(enable_timing=True)
+    end_epoch = torch.cuda.Event(enable_timing=True)
+
+    for epoch in range(init_epoch, args.num_epoch + 1):
+        #train_sampler.set_epoch(epoch)
+
+        start_epoch.record()
         for iteration, (x, y) in enumerate(data_loader):
-            #optimizerD.zero_grad()
-            #optimizerG.zero_grad()
+            start.record()
+            optimizerD.zero_grad()
+            optimizerG.zero_grad()
 
             #requires_grad(netD)
             for p in netD.parameters():
@@ -327,9 +333,9 @@ def train(rank, gpu, args):
 
             # train with real
             D_real = netD(x_t, t, x_tp1.detach()).view(-1)
-            errD_real = F.softplus(-D_real).mean()
-            #errD_real = loss(D_real, "disc_real").mean()
-            
+            #errD_real = F.softplus(-D_real).mean()
+            errD_real = loss(D_real, "disc_real")
+        
             errD_real.backward(retain_graph=True)
 
             if args.lazy_reg is None:
@@ -344,8 +350,8 @@ def train(rank, gpu, args):
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            errD_fake = F.softplus(output).mean()
-            #errD_fake = loss(output, "disc_fake").mean()
+            #errD_fake = F.softplus(output).mean()
+            errD_fake = loss(output, "disc_fake")
             
             errD_fake.backward()
 
@@ -375,8 +381,8 @@ def train(rank, gpu, args):
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            errG = F.softplus(-output).mean()
-            #errG = loss(output, "gen").mean()
+            #errG = F.softplus(-output).mean()
+            errG = loss(output, "gen")
 
             # reconstructior loss
             if args.sigmoid_learning and args.rec_loss:
@@ -394,23 +400,28 @@ def train(rank, gpu, args):
             torch.nn.utils.clip_grad_norm_(netG.parameters(), 0.5)
             optimizerG.step()
 
+            end.record()
+            torch.cuda.synchronize()
+            print("\rIteration time: {:.0f} ms".format(start.elapsed_time(end)), end="")
+
             global_step += 1
             if iteration % 100 == 0:
                 if rank == 0:
                     if args.sigmoid_learning:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, alpha: {}'.format(
+                        print('\nepoch {} iteration{}, G Loss: {}, D Loss: {}, alpha: {}'.format(
                             epoch, iteration, errG.item(), errD.item(), alpha[epoch]))
                     elif args.rec_loss:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, rec_loss: {}'.format(
+                        print('\nepoch {} iteration{}, G Loss: {}, D Loss: {}, rec_loss: {}'.format(
                             epoch, iteration, errG.item(), errD.item(), rec_loss.item()))
                     else:   
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
+                        print('\nepoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
                             epoch, iteration, errG.item(), errD.item()))
 
         if not args.no_lr_decay:
 
             schedulerG.step()
             schedulerD.step()
+        
 
         if rank == 0:
             wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
@@ -438,7 +449,7 @@ def train(rank, gpu, args):
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
-                    print('Saving content.')
+                    print('\nSaving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'netG_dict': netG.state_dict(), 'optimizerG': optimizerG.state_dict(),
                                'schedulerG': schedulerG.state_dict(), 'netD_dict': netD.state_dict(),
@@ -460,6 +471,11 @@ def train(rank, gpu, args):
                 #        store_params_in_ema=True)
                 if args.use_ema:
                     update_ema(ema, netG, decay=0)
+        
+        end_epoch.record()
+        torch.cuda.synchronize()
+        print("\nEpoch time: {:.3f} s".format(start_epoch.elapsed_time(end_epoch) / 1000))
+    
 
 
 if __name__ == '__main__':
@@ -712,6 +728,6 @@ if __name__ == '__main__':
                 "model": args.model
             }
         )
-        init_processes(0, size, train, args)
-        #train(0, 0, args)
-        wandb.finish()
+        #init_processes(0, size, train, args)
+        train(0, 0, args)
+        

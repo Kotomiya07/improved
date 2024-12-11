@@ -106,6 +106,7 @@ def train(rank, gpu, args):
     disc_net = [Discriminator_small, Discriminator_large]
     print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = gen_net(args).to(device)
+    print("model loaded!")
 
     if args.dataset in ['cifar10', 'stl10']:
         netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
@@ -220,13 +221,18 @@ def train(rank, gpu, args):
     print(f"Generator Parameters: {sum(p.numel() for p in netG.parameters()):,}")
     print(f"Discriminator Parameters: {sum(p.numel() for p in netD.parameters()):,}")
 
-    netG._set_static_graph()
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+
+    start_epoch = torch.cuda.Event(enable_timing=True)
+    end_epoch = torch.cuda.Event(enable_timing=True)
 
 
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
-
+        start_epoch.record()
         for iteration, (x, y) in enumerate(data_loader):
+            start.record()
             for p in netD.parameters():
                 p.requires_grad = True
             netD.zero_grad()
@@ -314,18 +320,26 @@ def train(rank, gpu, args):
             errG.backward()
             optimizerG.step()
 
+            end.record()
+            torch.cuda.synchronize()
+            #print("\rIteration time: {:.0f} ms".format(start.elapsed_time(end)), end="")
+
+
             global_step += 1
-            if iteration % 100 == 0:
-                if rank == 0:
-                    if args.sigmoid_learning:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, alpha: {}'.format(
-                            epoch, iteration, errG.item(), errD.item(), alpha[epoch]))
-                    elif args.rec_loss:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, rec_loss: {}'.format(
-                            epoch, iteration, errG.item(), errD.item(), rec_loss.item()))
-                    else:   
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
-                            epoch, iteration, errG.item(), errD.item()))
+            #if iteration % 100 == 0:
+            if rank == 0:
+                iter_time = start.elapsed_time(end)
+                if args.sigmoid_learning:
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] alpha[{:.4f}]'.format(
+                        epoch, iteration, iter_time, errG.item(), errD.item(), alpha[epoch]), end="")
+                elif args.rec_loss:
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] rec_loss[{:.4f}]'.format(
+                        epoch, iteration, iter_time, errG.item(), errD.item(), rec_loss.item()), end="")
+                else:   
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}]'.format(
+                        epoch, iteration, iter_time, errG.item(), errD.item()), end="")
+
+                wandb.log({"G_loss_iter": errG.item(), "D_loss_iter": errD.item(), "iter_time": iter_time})
 
         if not args.no_lr_decay:
 
@@ -333,7 +347,11 @@ def train(rank, gpu, args):
             schedulerD.step()
 
         if rank == 0:
-            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
+            end_epoch.record()
+            torch.cuda.synchronize()
+            epoch_time = start_epoch.elapsed_time(end_epoch)
+            print("\nEpoch time: {:.3f} s".format(epoch_time / 1000))
+            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "epoch_time": epoch_time / 1000})
             ########################################
             x_t_1 = torch.randn_like(posterior.sample())
             fake_sample = sample_from_model(
@@ -357,11 +375,12 @@ def train(rank, gpu, args):
                 real_data, os.path.join(exp_path, 'real_data.png'))
             
             # TODO: wandbに画像を保存
+            wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])], "real_data": [wandb.Image(real_data[:4])]})
             
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
-                    print('Saving content.')
+                    print('\nSaving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'netG_dict': netG.state_dict(), 'optimizerG': optimizerG.state_dict(),
                                'schedulerG': schedulerG.state_dict(), 'netD_dict': netD.state_dict(),
@@ -378,6 +397,7 @@ def train(rank, gpu, args):
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(
                         store_params_in_ema=True)
+    
 
 # %%
 if __name__ == '__main__':
@@ -523,7 +543,7 @@ if __name__ == '__main__':
     size = args.num_process_per_node
 
     wandb.init(
-        project="TEST",
+        project="iddgan-original",
         name=args.exp,
         # すべてのパラメータをログに記録
         config={

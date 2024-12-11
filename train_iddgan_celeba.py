@@ -21,6 +21,29 @@ import yaml
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 import wandb
+from copy import deepcopy
+from collections import OrderedDict
+from PIL import Image as PILImage
+
+@torch.no_grad()
+def update_ema(ema_model, model, decay=0.9999):
+    """
+    Step the EMA model towards the current model.
+    """
+    ema_params = OrderedDict(ema_model.named_parameters())
+    model_params = OrderedDict(model.named_parameters())
+
+    for name, param in model_params.items():
+        name = name.replace("module.", "")
+        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
+        ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
+
+def requires_grad(model, flag=True):
+    """
+    Set requires_grad flag for all parameters in a model.
+    """
+    for p in model.parameters():
+        p.requires_grad = flag
 
 def load_model_from_config(config_path, ckpt):
     print(f"Loading model from {ckpt}")
@@ -47,7 +70,7 @@ def grad_penalty_call(args, D_real, x_t):
     ).mean()
 
     grad_penalty = args.r1_gamma / 2 * grad_penalty
-    grad_penalty.backward()
+    return grad_penalty
 
 
 # %%
@@ -66,15 +89,12 @@ def train(rank, gpu, args):
     nz = args.nz  # latent dimension
 
     dataset = create_dataset(args)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-                                                                    num_replicas=args.world_size,
-                                                                    rank=rank)
+
     data_loader = torch.utils.data.DataLoader(dataset,
                                               batch_size=batch_size,
-                                              shuffle=False,
+                                              shuffle=True,
                                               num_workers=args.num_workers,
                                               pin_memory=True,
-                                              sampler=train_sampler,
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
@@ -83,6 +103,7 @@ def train(rank, gpu, args):
     disc_net = [Discriminator_small, Discriminator_large]
     print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = gen_net(args).to(device)
+    print("model loaded!")
 
     if args.dataset in ['cifar10', 'stl10']:
         netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
@@ -93,8 +114,6 @@ def train(rank, gpu, args):
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
 
-    broadcast_params(netG.parameters())
-    broadcast_params(netD.parameters())
 
     optimizerD = optim.Adam(filter(lambda p: p.requires_grad, netD.parameters(
     )), lr=args.lr_d, betas=(args.beta1, args.beta2))
@@ -103,16 +122,14 @@ def train(rank, gpu, args):
 
     if args.use_ema:
         optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
+    
+    #ema = deepcopy(netG).to(device)  # Create an EMA of the model for use after training
+    #requires_grad(ema, False)
 
     schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizerG, args.num_epoch, eta_min=1e-5)
     schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizerD, args.num_epoch, eta_min=1e-5)
-
-    # ddp
-    netG = nn.parallel.DistributedDataParallel(
-        netG, device_ids=[gpu], find_unused_parameters=True)
-    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     """############### DELETE TO AVOID ERROR ###############"""
     # Wavelet Pooling
@@ -128,21 +145,21 @@ def train(rank, gpu, args):
     config_path = args.AutoEncoder_config 
     ckpt_path = args.AutoEncoder_ckpt 
     
-    if args.dataset in ['cifar10', 'stl10'] or True:
+    #if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
 
-        with open(config_path, 'r') as file:
-            config = yaml.safe_load(file)
-        
-        AutoEncoder = instantiate_from_config(config['model'])
-        
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
 
-        checkpoint = torch.load(ckpt_path, map_location=device)
-        AutoEncoder.load_state_dict(checkpoint['state_dict'])
-        AutoEncoder.eval()
-        AutoEncoder.to(device)
+    AutoEncoder = instantiate_from_config(config['model'])
+
+
+    checkpoint = torch.load(ckpt_path, map_location=device)
+    AutoEncoder.load_state_dict(checkpoint['state_dict'])
+    AutoEncoder.eval()
+    AutoEncoder.to(device)
     
-    else:
-        AutoEncoder = load_model_from_config(config_path, ckpt_path)
+    #else:
+    #    AutoEncoder = load_model_from_config(config_path, ckpt_path)
     """############### END DELETING ###############"""
     
     num_levels = int(np.log2(args.ori_image_size // args.current_resolution))
@@ -186,10 +203,18 @@ def train(rank, gpu, args):
     gamma = 6
     beta = np.linspace(-gamma, gamma, args.num_epoch+1)
     alpha = 1 - 1 / (1+np.exp(-beta))
+    
+    #update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
+    #ema.eval()
+
+    print(f"AutoEncoder Parameters: {sum(p.numel() for p in AutoEncoder.parameters()):,}")
+    print(f"Generator Parameters: {sum(p.numel() for p in netG.parameters()):,}")
+    print(f"Discriminator Parameters: {sum(p.numel() for p in netD.parameters()):,}")
+
+    #netG._set_static_graph()
+
 
     for epoch in range(init_epoch, args.num_epoch + 1):
-        train_sampler.set_epoch(epoch)
-
         for iteration, (x, y) in enumerate(data_loader):
             for p in netD.parameters():
                 p.requires_grad = True
@@ -319,6 +344,9 @@ def train(rank, gpu, args):
                 exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)))
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
+            
+            # TODO: wandbに画像を保存
+            
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
@@ -340,7 +368,7 @@ def train(rank, gpu, args):
                     optimizerG.swap_parameters_with_ema(
                         store_params_in_ema=True)
 
-
+# %%
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('ddgan parameters')
     parser.add_argument('--seed', type=int, default=1024,
@@ -463,24 +491,101 @@ if __name__ == '__main__':
                         help='address for master')
     parser.add_argument('--master_port', type=str, default='6002',
                         help='port for master')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num_workers', type=int, default=16,
                         help='num_workers')
     
     ##### My parameter #####
     parser.add_argument('--scale_factor', type=float, default=16.,
                         help='scale of Encoder output')
-    parser.add_argument("--img_rec_loss", action="store_true", default=True)
     parser.add_argument(
         '--AutoEncoder_config', default='./autoencoder/config/autoencoder_kl_f2_16x16x4_Cifar10_big.yaml', help='path of config file for AntoEncoder')
 
     parser.add_argument(
         '--AutoEncoder_ckpt', default='./autoencoder/weight/last_big.ckpt', help='path of weight for AntoEncoder')
+    
     parser.add_argument("--sigmoid_learning", action="store_true")
     parser.add_argument("--class_conditional", action="store_true", default=False)
+    
     args = parser.parse_args()
 
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
+
+    wandb.init(
+        project="TEST",
+        name=args.exp,
+        # すべてのパラメータをログに記録
+        config={
+            "seed": args.seed,
+            "image_size": args.image_size,
+            "num_channels": args.num_channels,
+            "centered": args.centered,
+            "use_geometric": args.use_geometric,
+            "beta_min": args.beta_min,
+            "beta_max": args.beta_max,
+            "patch_size": args.patch_size,
+            "num_channels_dae": args.num_channels_dae,
+            "n_mlp": args.n_mlp,
+            "ch_mult": args.ch_mult,
+            "num_res_blocks": args.num_res_blocks,
+            "attn_resolutions": args.attn_resolutions,
+            "dropout": args.dropout,
+            "resamp_with_conv": args.resamp_with_conv,
+            "conditional": args.conditional,
+            "fir": args.fir,
+            "fir_kernel": args.fir_kernel,
+            "skip_rescale": args.skip_rescale,
+            "resblock_type": args.resblock_type,
+            "progressive": args.progressive,
+            "progressive_input": args.progressive_input,
+            "progressive_combine": args.progressive_combine,
+            "embedding_type": args.embedding_type,
+            "fourier_scale": args.fourier_scale,
+            "not_use_tanh": args.not_use_tanh,
+            "exp": args.exp,
+            "dataset": args.dataset,
+            "datadir": args.datadir,
+            "nz": args.nz,
+            "num_timesteps": args.num_timesteps,
+            "z_emb_dim": args.z_emb_dim,
+            "t_emb_dim": args.t_emb_dim,
+            "batch_size": args.batch_size,
+            "num_epoch": args.num_epoch,
+            "ngf": args.ngf,
+            "lr_g": args.lr_g,
+            "lr_d": args.lr_d,
+            "beta1": args.beta1,
+            "beta2": args.beta2,
+            "no_lr_decay": args.no_lr_decay,
+            "use_ema": args.use_ema,
+            "ema_decay": args.ema_decay,
+            "r1_gamma": args.r1_gamma,
+            "lazy_reg": args.lazy_reg,
+            "current_resolution": args.current_resolution,
+            "use_pytorch_wavelet": args.use_pytorch_wavelet,
+            "rec_loss": args.rec_loss,
+            "net_type": args.net_type,
+            "num_disc_layers": args.num_disc_layers,
+            "no_use_fbn": args.no_use_fbn,
+            "no_use_freq": args.no_use_freq,
+            "no_use_residual": args.no_use_residual,
+            "save_content": args.save_content,
+            "save_content_every": args.save_content_every,
+            "save_ckpt_every": args.save_ckpt_every,
+            "num_proc_node": args.num_proc_node,
+            "num_process_per_node": args.num_process_per_node,
+            "node_rank": args.node_rank,
+            "local_rank": args.local_rank,
+            "master_address": args.master_address,
+            "master_port": args.master_port,
+            "num_workers": args.num_workers,
+            "scale_factor": args.scale_factor,
+            "AutoEncoder_config": args.AutoEncoder_config,
+            "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
+            "sigmoid_learning": args.sigmoid_learning,
+            "class_conditional": args.class_conditional
+        }
+    )
 
     if size > 1:
         processes = []
@@ -500,35 +605,5 @@ if __name__ == '__main__':
             p.join()
     else:
         print('starting in debug mode')
-        wandb.init(
-            project="IDDGAN",
-            config={
-                "dataset": args.dataset,
-                "image_size": args.image_size,
-                "channels": args.num_channels,
-                "timesteps": args.num_timesteps,
-                "nz": args.nz,
-                "epochs": args.num_epoch,
-                "ngf": args.ngf,
-                "lr_g": args.lr_g,
-                "lr_d": args.lr_d,
-                "batch_size": args.batch_size,
-                "r1_gamma": args.r1_gamma,
-                "lazy_reg": args.lazy_reg,
-                "use_ema": args.use_ema,
-                "ema_decay": args.ema_decay,
-                "no_lr_decay": args.no_lr_decay,
-                "use_pytorch_wavelet": args.use_pytorch_wavelet,
-                "rec_loss": args.rec_loss,
-                "net_type": args.net_type,
-                "num_disc_layers": args.num_disc_layers,
-                "no_use_fbn": args.no_use_fbn,
-                "no_use_freq": args.no_use_freq,
-                "no_use_residual": args.no_use_residual,
-                "scale_factor": args.scale_factor,
-                "AutoEncoder_config": args.AutoEncoder_config,
-                "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
-                "sigmoid_learning": args.sigmoid_learning,
-            }
-        )
-        init_processes(0, size, train, args)
+        train(0, 0, args)
+        wandb.finish()

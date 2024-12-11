@@ -162,7 +162,8 @@ def train(rank, gpu, args):
         input_size=args.image_size,
         in_channels=args.num_channels,
     ).to(device)
-    
+    #netG = torch.compile(netG)
+
     if args.dataset in ['cifar10', 'stl10']:
         netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
                            t_emb_dim=args.t_emb_dim,
@@ -310,7 +311,7 @@ def train(rank, gpu, args):
             """################# Change here: Encoder #################"""
             with torch.no_grad():
                 posterior = AutoEncoder.encode(x0)
-                real_data = posterior.sample().detach()
+                real_data = posterior.detach()
             #print("MIN:{}, MAX:{}".format(real_data.min(), real_data.max()))
             real_data = real_data / args.scale_factor #300.0  # [-1, 1]
             
@@ -415,7 +416,7 @@ def train(rank, gpu, args):
         if rank == 0:
             wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
             ########################################
-            x_t_1 = torch.randn_like(posterior.sample())
+            x_t_1 = torch.randn_like(posterior)
             fake_sample = sample_from_model(
                 pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 

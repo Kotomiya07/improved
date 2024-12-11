@@ -43,8 +43,8 @@ def sample_and_test(args):
 
     # DDPで学習したら以下を適用する
     # loading weights from ddp in single gpu
-    for key in list(ckpt.keys()):
-        ckpt[key[7:]] = ckpt.pop(key)
+    #for key in list(ckpt.keys()):
+    #    ckpt[key[7:]] = ckpt.pop(key)
 
     netG.load_state_dict(ckpt, strict=False)
     netG.eval()
@@ -304,6 +304,8 @@ if __name__ == '__main__':
     parser.add_argument('--class_conditional', action='store_true', default=False)
 
     parser.add_argument('--fid_only', action='store_true', default=False)
+
+    parser.add_argument('--depth', type=int, default=1)
     args = parser.parse_args()
 
     sample_and_test(args)

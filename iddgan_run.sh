@@ -27,8 +27,8 @@ if [[ $MODE == train ]]; then
 	echo "==> Training IDDGAN"
 
 	if [[ $DATASET == cifar10 ]]; then
-		python3 train_iddgan_dit.py --dataset cifar10 --exp cifar10-loss-fix --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
-			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+		python3 train_iddgan.py --dataset cifar10 --exp cifar10-original-nz50 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
 			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
 			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
@@ -38,6 +38,47 @@ if [[ $MODE == train ]]; then
 			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
 			--rec_loss \
 			--sigmoid_learning
+	
+	elif [[ $DATASET == cifar10_no_ddp ]]; then
+		python3 train_iddgan_no_ddp.py --dataset cifar10 --exp cifar10-no-ddp --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning
+	
+	elif [[ $DATASET == cifar10_a100_01 ]]; then
+		accelerate launch --multi_gpu --num_processes 2 --mixed_precision fp16 train_iddgan.py --dataset cifar10 --exp cifar10-ddp --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port 50719 --num_process_per_node 1 --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--num_proc_node 2 --node_rank 0 --master_address 10.111.5.21
+	
+	elif [[ $DATASET == cifar10_a100_02 ]]; then
+		torchrun --nnodes=2 --nproc-per-node=1 --node-rank=1 --rdzv-id=719 --rdzv-backend=c10d --rdzv-endpoint=10.111.5.21:50719 --master-port 50719 train_iddgan.py --dataset cifar10 --exp cifar10-ddp --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port 50719 --num_process_per_node 1 --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--num_proc_node 2 --node_rank 1 --master_address 10.111.5.21
 	
 	elif [[ $DATASET == cifar10_dit ]]; then
 		python3 train_iddgan_dit.py --dataset cifar10 --exp cifar10-dit --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
@@ -53,7 +94,7 @@ if [[ $MODE == train ]]; then
 			--sigmoid_learning
 	
 	elif [[ $DATASET == cifar10_dit_fix ]]; then
-		python3 train_iddgan.py --dataset cifar10 --exp cifar10-dit-fix-2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+		python3 train_iddgan.py --dataset cifar10 --exp cifar10-dit-fix-3 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
 			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
@@ -65,6 +106,191 @@ if [[ $MODE == train ]]; then
 			--rec_loss \
 			--sigmoid_learning \
 			--resblock_type biggan_with_dit
+	
+    elif [[ $DATASET == cifar10_dit_no_ddp_ss1 ]]; then
+		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-ss1-hinge --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.2e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-SS/1 \
+			--loss_type hinge
+
+    elif [[ $DATASET == cifar10_dit_no_ddp_s2_bce ]]; then
+		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-s2-bce --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.2e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-S/2 \
+			--loss_type bce
+
+    elif [[ $DATASET == cifar10_dit_no_ddp_m2 ]]; then
+		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-m2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.2e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-M/2
+
+    elif [[ $DATASET == cifar10_dit_no_ddp_m2_hinge ]]; then
+		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-m2-hinge --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.2e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-M/2 \
+			--loss_type hinge
+
+    elif [[ $DATASET == cifar10_dit_ss1_fix ]]; then
+		python3 train_iddgan_dit.py --dataset cifar10 --exp cifar10-ori-dit-ss1-fix --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.2e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-SS/1
+	
+    elif [[ $DATASET == cifar10_dit_s2 ]]; then
+		python3 train_iddgan_dit.py --dataset cifar10 --exp cifar10-ori-dit-s2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 8e-5 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-S/2
+
+	elif [[ $DATASET == cifar10_dit_b2 ]]; then
+		python3 train_iddgan_dit.py --dataset cifar10 --exp cifar10-ori-dit-b2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 8e-5 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-B/2
+	
+	elif [[ $DATASET == cifar10_dit_l2 ]]; then
+		python3 train_iddgan_dit.py --dataset cifar10 --exp cifar10-ori-dit-l2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 8e-5 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-L/2
+	
+	elif [[ $DATASET == cifar10_dit_xl2 ]]; then
+		python3 train_iddgan_dit.py --dataset cifar10 --exp cifar10-ori-dit-xl2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.0e-4 --lr_g 2.0e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-XL/2
+	
+	elif [[ $DATASET == cifar10_dit_no_ddp_s2 ]]; then
+		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-S/2
+	
+	elif [[ $DATASET == cifar10_dit_no_ddp_b2 ]]; then
+		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-b2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-B/2
+	
+	elif [[ $DATASET == cifar10_dit_no_ddp_l2 ]]; then
+		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-l2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-L/2
+	
+	elif [[ $DATASET == cifar10_dit_no_ddp_xl2 ]]; then
+		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-xl2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--model DiT-XL/2
 	
 	elif [[ $DATASET == cifar10_dit_fix_acc ]]; then
 		accelerate launch --mixed_precision fp16 train_iddgan.py --dataset cifar10 --exp cifar10-dit-fix-2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
@@ -267,6 +493,34 @@ if [[ $MODE == train ]]; then
 			--scale_factor 6.0 \
 			--no_lr_decay \
 			--sigmoid_learning 
+	
+	elif [[ $DATASET == celeba_256_dit_no_ddp_xl2 ]]; then
+		python3 train_iddgan_dit_no_ddp.py --dataset celeba_256 --image_size 256 --exp celeba-256-dit-no-dddp-xl2 --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \
+			--num_res_blocks 2 --batch_size 32 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+			--nz 100 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/celeba/celeba-lmdb/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 64 --attn_resolution 16 --num_disc_layers 4 --rec_loss \
+			--save_content_every 1 \
+			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
+			--scale_factor 6.0 \
+			--no_lr_decay \
+			--sigmoid_learning \
+			--model DiT-XL/2
+	
+	elif [[ $DATASET == celeba_256_dit_no_ddp ]]; then
+		python3 train_iddgan_no_ddp_celeba.py --dataset celeba_256 --image_size 256 --exp celeba-256-dit-no-ddp --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \
+			--num_res_blocks 2 --batch_size 32 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+			--nz 100 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/celeba/celeba-lmdb/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 64 --attn_resolution 16 --num_disc_layers 4 --rec_loss \
+			--save_content_every 1 \
+			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
+			--scale_factor 6.0 \
+			--no_lr_decay \
+			--sigmoid_learning \
+			--resblock_type biggan_with_dit
     
     elif [[ $DATASET == celeba_256_bCR ]]; then
 		python3 train_iddgan_celeba_bCR.py --dataset celeba_256 --image_size 256 --exp vq-f4-256-bCR --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \
@@ -293,6 +547,47 @@ if [[ $MODE == train ]]; then
 			--scale_factor 60.0 \
 			--sigmoid_learning \
 			--no_lr_decay 
+
+	elif [[ $DATASET == lsun_vqf8_no_ddp ]]; then
+		python3 train_iddgan_no_ddp_celeba.py --dataset lsun --image_size 256 --exp lsun_vqf8_no_ddp --num_channels 4 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \
+			--num_res_blocks 3 --batch_size 32 --num_epoch 4000 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 1. \
+			--nz 50 --z_emb_dim 256 --lr_d 1e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/lsun/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 32 --attn_resolution 16 --num_disc_layers 4  \
+			--save_content_every 1 \
+			--AutoEncoder_config ./autoencoder/config/vq-f8.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f8.ckpt \
+			--scale_factor 60.0 \
+			--sigmoid_learning \
+			--no_lr_decay 
+	
+	elif [[ $DATASET == lsun_vqf4_likeCelebA_dit_l2 ]]; then
+		python3 train_iddgan_dit_celeba.py --dataset lsun --image_size 256 --exp lsun_vqf4_likeceleba_dit_l2 --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 32 --num_epoch 4000 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+			--nz 100 --z_emb_dim 256 --lr_d 1e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/lsun/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 64 --attn_resolution 16 --num_disc_layers 4  --rec_loss \
+			--save_content_every 1 \
+			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
+			--scale_factor 6.0 \
+			--sigmoid_learning \
+			--no_lr_decay \
+			--model DiT-L/2
+
+	elif [[ $DATASET == lsun_vqf8_dit_no_ddp_l2 ]]; then
+		python3 train_iddgan_dit_no_ddp_celeba.py --dataset lsun --image_size 256 --exp lsun_vqf8_dit_no_ddp_L2 --num_channels 4 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \
+			--num_res_blocks 3 --batch_size 32 --num_epoch 4000 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 1. \
+			--nz 50 --z_emb_dim 256 --lr_d 1e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/lsun/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 32 --attn_resolution 16 --num_disc_layers 4  \
+			--save_content_every 1 \
+			--AutoEncoder_config ./autoencoder/config/vq-f8.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f8.ckpt \
+			--scale_factor 60.0 \
+			--sigmoid_learning \
+			--no_lr_decay \
+			--model DiT-L/2
     
     elif [[ $DATASET == lsun_bCR_kl ]]; then
 		python3 train_iddgan_bCR.py --dataset lsun_no_transform --image_size 256 --exp kl-f8-256-bCR --num_channels 4 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \

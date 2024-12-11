@@ -192,7 +192,8 @@ class NCSNpp(nn.Module):
                                             init_scale=init_scale,
                                             skip_rescale=skip_rescale,
                                             temb_dim=nf * 4,
-                                            zemb_dim=z_emb_dim)
+                                            zemb_dim=z_emb_dim,
+                                            depth=config.depth,)
 
         else:
             raise ValueError(f'resblock type {resblock_type} unrecognized.')

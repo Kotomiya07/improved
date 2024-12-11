@@ -94,6 +94,54 @@ class LabelEmbedder(nn.Module):
         return embeddings
 
 
+class ZEmbedder(nn.Module):
+    def __init__(self, target_shape):
+        """
+        ZEmbedder: (N, N) -> (N, C, H, W)
+
+        Parameters:
+            target_shape (tuple): ターゲットの形状 (H, W, C)
+        """
+        super(ZEmbedder, self).__init__()
+        self.target_shape = target_shape
+        H, W, C = target_shape
+        intermediate_channels = 64  # 中間チャネル数
+        
+        # 全結合層で入力を初期形状に変換 (N -> H * W * intermediate_channels)
+        self.fc = nn.Linear(H * W, H * W * intermediate_channels)
+        
+        # 畳み込み層でチャネルを変換
+        self.conv = nn.Sequential(
+            nn.Conv2d(intermediate_channels, 128, kernel_size=3, stride=1, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(128, C, kernel_size=3, stride=1, padding=1),
+            nn.SiLU()
+        )
+        
+    def forward(self, z):
+        """
+        Forward pass to transform the input tensor.
+
+        Parameters:
+            z (torch.Tensor): 入力テンソル, shape=(N, D)
+
+        Returns:
+            torch.Tensor: 変換後のテンソル, shape=(N, H, W, C)
+        """
+        N = z.size(0)
+        H, W, C = self.target_shape
+        
+        # 入力を全結合層で初期変換
+        z = self.fc(z)  # (N, N) -> (N, H * W * intermediate_channels)
+        intermediate_channels = z.size(1) // (H * W)
+        z = z.view(N, intermediate_channels, H, W)  # (N, H * W * C_int) -> (N, C_int, H, W)
+        
+        # 畳み込み層でチャネルを変換
+        z = self.conv(z)  # (N, C_int, H, W) -> (N, C, H, W)
+        
+        return z
+
+
 #################################################################################
 #                                 Core DiT Model                                #
 #################################################################################
@@ -141,15 +189,6 @@ class FinalLayer(nn.Module):
         x = self.linear(x)
         return x
 
-from score_sde.models import dense_layer
-dense = dense_layer.dense
-
-class PixelNorm(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, input):
-        return input / torch.sqrt(torch.mean(input ** 2, dim=1, keepdim=True) + 1e-8)
 
 class DiT(nn.Module):
     """
@@ -167,8 +206,6 @@ class DiT(nn.Module):
         class_dropout_prob=0.1,
         num_classes=1000,
         learn_sigma=False,
-        nz=100,
-        n_mlp=4,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -180,6 +217,7 @@ class DiT(nn.Module):
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         #self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+        #self.z_embedder = ZEmbedder(target_shape=(input_size, input_size, in_channels))
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
@@ -189,16 +227,6 @@ class DiT(nn.Module):
         ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
-        
-        self.act = nn.SiLU()
-        mapping_layers = [PixelNorm(),
-                          dense(nz, hidden_size),
-                          self.act, 
-                        ]
-        for _ in range(n_mlp):
-            mapping_layers.append(dense(hidden_size, hidden_size))
-            mapping_layers.append(self.act)
-        self.z_transform = nn.Sequential(*mapping_layers)
 
     def initialize_weights(self):
         # Initialize transformer layers:
@@ -220,6 +248,14 @@ class DiT(nn.Module):
 
         # Initialize label embedding table:
         #nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+
+        # Initialize z embedding layer:
+        #nn.init.normal_(self.z_embedder.fc.weight, 0)
+        #nn.init.constant_(self.z_embedder.fc.bias, 0)
+        #for layer in self.z_embedder.conv:
+        #    if isinstance(layer, nn.Conv2d):
+        #        nn.init.normal_(layer.weight, 0)
+        #        nn.init.constant_(layer.bias, 0)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -257,18 +293,18 @@ class DiT(nn.Module):
             return outputs
         return ckpt_forward
 
-    def forward(self, x, t, z):
+    def forward(self, x, t, y):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
         t: (N,) tensor of diffusion timesteps
-        y: (N,) tensor of class labels
+        y: (N, C, H, W) tensor of images diffused to timestep t
         """
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
-        #y = self.y_embedder(y, self.training)    # (N, D)
-        z = self.z_transform(z)
-        c = t + z                                # (N, D)
+        #y = self.z_embedder(y)                   # (N, D)
+        #y = self.x_embedder(y) + self.pos_embed # (N, T, D)    # 変更
+        c = t                                # (N, D)    # 変更
         for block in self.blocks:
             x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c)       # (N, T, D)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
@@ -380,6 +416,9 @@ def DiT_B_4(**kwargs):
 def DiT_B_8(**kwargs):
     return DiT(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
 
+def DiT_M_2(**kwargs):
+    return DiT(depth=8, hidden_size=768, patch_size=2, num_heads=6, **kwargs)
+
 def DiT_S_2(**kwargs):
     return DiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
 
@@ -389,10 +428,24 @@ def DiT_S_4(**kwargs):
 def DiT_S_8(**kwargs):
     return DiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
 
+def DiT_SS_1(**kwargs):
+    return DiT(depth=8, hidden_size=384, patch_size=1, num_heads=6, **kwargs)
+
+def DiT_SS_2(**kwargs):
+    return DiT(depth=8, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
+
+def DiT_SS_4(**kwargs):
+    return DiT(depth=8, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
+
+def DiT_SS_8(**kwargs):
+    return DiT(depth=8, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+
 
 DiT_models = {
     'DiT-XL/2': DiT_XL_2,  'DiT-XL/4': DiT_XL_4,  'DiT-XL/8': DiT_XL_8,
     'DiT-L/2':  DiT_L_2,   'DiT-L/4':  DiT_L_4,   'DiT-L/8':  DiT_L_8,
     'DiT-B/2':  DiT_B_2,   'DiT-B/4':  DiT_B_4,   'DiT-B/8':  DiT_B_8,
+    'DiT-M/2':  DiT_M_2,
     'DiT-S/2':  DiT_S_2,   'DiT-S/4':  DiT_S_4,   'DiT-S/8':  DiT_S_8,
+    'DiT-SS/1':  DiT_SS_1, 'DiT-SS/2':  DiT_SS_2,   'DiT-SS/4':  DiT_SS_4,   'DiT-SS/8':  DiT_SS_8,
 }

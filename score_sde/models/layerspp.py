@@ -577,7 +577,6 @@ class ResnetBlockBigGANpp_Adagn_with_DiT(nn.Module):
         self.in_ch = in_ch
         self.out_ch = out_ch
 
-
         self.x_embedder = PatchEmbed(size, 2, in_ch, zemb_dim, bias=True)
         # Initialize the DiTBlock if provided
         self.blocks = nn.ModuleList([

@@ -10,6 +10,7 @@ from diffusion import get_time_schedule, Posterior_Coefficients, \
 from pytorch_fid.fid_score import calculate_fid_given_paths
 #from pytorch_wavelets import DWTInverse
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp, WaveletNCSNpp
+from models_fix import DiT_models
 
 
 # %%
@@ -37,7 +38,10 @@ def sample_and_test(args):
     gen_net = G_NET_ZOO[args.net_type]
     #print("GEN: {}".format(gen_net))
 
-    netG = gen_net(args).to(device)
+    netG = DiT_models[args.model](
+        input_size=args.image_size,
+        in_channels=args.num_channels,
+    ).to(device)
     ckpt = torch.load('./saved_info/{}/{}/netG_{}.pth'.format(
         args.dataset, args.exp, args.epoch_id), map_location=device)
 
@@ -304,6 +308,8 @@ if __name__ == '__main__':
     parser.add_argument('--class_conditional', action='store_true', default=False)
 
     parser.add_argument('--fid_only', action='store_true', default=False)
+    
+    parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
     args = parser.parse_args()
 
     sample_and_test(args)

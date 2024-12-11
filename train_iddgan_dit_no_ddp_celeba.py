@@ -142,15 +142,15 @@ def train(rank, gpu, args):
     nz = args.nz = batch_size  # latent dimension
 
     dataset = create_dataset(args)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
-                                                                    num_replicas=args.world_size,
-                                                                    rank=rank)
+    #train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
+    #                                                                num_replicas=args.world_size,
+    #                                                                rank=rank)
     data_loader = torch.utils.data.DataLoader(dataset,
                                               batch_size=batch_size,
-                                              shuffle=False,
+                                              shuffle=True,
                                               num_workers=args.num_workers,
                                               pin_memory=True,
-                                              sampler=train_sampler,
+    #                                          sampler=train_sampler,
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
@@ -162,7 +162,8 @@ def train(rank, gpu, args):
         input_size=args.image_size,
         in_channels=args.num_channels,
     ).to(device)
-    
+    #netG = torch.compile(netG)
+
     if args.dataset in ['cifar10', 'stl10']:
         netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
                            t_emb_dim=args.t_emb_dim,
@@ -172,8 +173,8 @@ def train(rank, gpu, args):
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
 
-    broadcast_params(netG.parameters())
-    broadcast_params(netD.parameters())
+    #broadcast_params(netG.parameters())
+    #broadcast_params(netD.parameters())
 
     optimizerD = optim.Adam(filter(lambda p: p.requires_grad, netD.parameters(
     )), lr=args.lr_d, betas=(args.beta1, args.beta2))
@@ -192,8 +193,8 @@ def train(rank, gpu, args):
         optimizerD, args.num_epoch, eta_min=1e-5)
 
     # ddp
-    netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
-    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
+    #netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
+    #netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     """############### DELETE TO AVOID ERROR ###############"""
     # Wavelet Pooling
@@ -289,7 +290,7 @@ def train(rank, gpu, args):
     ema.eval()
 
     for epoch in range(init_epoch, args.num_epoch + 1):
-        train_sampler.set_epoch(epoch)
+        #train_sampler.set_epoch(epoch)
 
         for iteration, (x, y) in enumerate(data_loader):
             #optimizerD.zero_grad()
@@ -310,7 +311,7 @@ def train(rank, gpu, args):
             """################# Change here: Encoder #################"""
             with torch.no_grad():
                 posterior = AutoEncoder.encode(x0)
-                real_data = posterior.sample().detach()
+                real_data = posterior.detach()
             #print("MIN:{}, MAX:{}".format(real_data.min(), real_data.max()))
             real_data = real_data / args.scale_factor #300.0  # [-1, 1]
             
@@ -415,7 +416,7 @@ def train(rank, gpu, args):
         if rank == 0:
             wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
             ########################################
-            x_t_1 = torch.randn_like(posterior.sample())
+            x_t_1 = torch.randn_like(posterior)
             fake_sample = sample_from_model(
                 pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 
@@ -712,6 +713,6 @@ if __name__ == '__main__':
                 "model": args.model
             }
         )
-        init_processes(0, size, train, args)
-        #train(0, 0, args)
-        wandb.finish()
+        #init_processes(0, size, train, args)
+        train(0, 0, args)
+        

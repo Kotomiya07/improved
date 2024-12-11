@@ -9,7 +9,9 @@ from diffusion import get_time_schedule, Posterior_Coefficients, \
 
 from pytorch_fid.fid_score import calculate_fid_given_paths
 #from pytorch_wavelets import DWTInverse
-from score_sde.models.ncsnpp_generator_adagn import NCSNpp, WaveletNCSNpp
+#from score_sde.models.ncsnpp_generator_adagn import NCSNpp, WaveletNCSNpp
+from models_fix import DiT_models
+from tqdm import tqdm
 
 
 # %%
@@ -33,18 +35,22 @@ def sample_and_test(args):
     args.image_size = args.current_resolution
     #print(args.image_size, args.ch_mult, args.attn_resolutions)
 
-    G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
-    gen_net = G_NET_ZOO[args.net_type]
+    #G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
+    #gen_net = G_NET_ZOO[args.net_type]
     #print("GEN: {}".format(gen_net))
 
-    netG = gen_net(args).to(device)
+    batch_size = args.batch_size
+    netG = DiT_models[args.model](
+        input_size=args.image_size,
+        in_channels=args.num_channels,
+    ).to(device)
     ckpt = torch.load('./saved_info/{}/{}/netG_{}.pth'.format(
         args.dataset, args.exp, args.epoch_id), map_location=device)
 
     # DDPで学習したら以下を適用する
     # loading weights from ddp in single gpu
-    for key in list(ckpt.keys()):
-        ckpt[key[7:]] = ckpt.pop(key)
+    #for key in list(ckpt.keys()):
+    #    ckpt[key[7:]] = ckpt.pop(key)
 
     netG.load_state_dict(ckpt, strict=False)
     netG.eval()
@@ -138,7 +144,7 @@ def sample_and_test(args):
         exit(0)
 
     if args.compute_fid:
-        for i in range(iters_needed):
+        for i in tqdm(range(iters_needed)):
             with torch.no_grad():
                 x_t_1 = torch.randn(
                     args.batch_size, args.num_channels, args.image_size, args.image_size).to(device)
@@ -304,6 +310,8 @@ if __name__ == '__main__':
     parser.add_argument('--class_conditional', action='store_true', default=False)
 
     parser.add_argument('--fid_only', action='store_true', default=False)
+
+    parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
     args = parser.parse_args()
 
     sample_and_test(args)

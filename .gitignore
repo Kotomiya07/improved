@@ -16,8 +16,8 @@ autoencoder/weight/
 features/
 wddgan_generated_samples/
 TEST/
-score_sde/op/build/
-score_sde/op/dist/
-score_sde/op/fused.egg-info/
-score_sde/op/upfirdn2d_op.egg-info/
-score_sde/op/*.so
+score_sde/build/
+score_sde/dist/
+score_sde/fused.egg-info/
+score_sde/upfirdn2d_op.egg-info/
+score_sde/*.so

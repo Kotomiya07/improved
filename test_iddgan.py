@@ -301,6 +301,7 @@ if __name__ == '__main__':
     parser.add_argument('--class_conditional', action='store_true', default=False)
 
     parser.add_argument('--fid_only', action='store_true', default=False)
+    
     args = parser.parse_args()
 
     sample_and_test(args)
