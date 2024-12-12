@@ -29,6 +29,7 @@ dependencies = [
     "wandb>=0.17.8",
     "requests>=2.28.1",
     "ipykernel>=6.29.5",
+    "timm>=1.0.12",
 ]
 readme = "README.md"
 requires-python = ">= 3.10"
