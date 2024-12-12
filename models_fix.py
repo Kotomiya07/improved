@@ -305,8 +305,10 @@ class DiT(nn.Module):
         #y = self.z_embedder(y)                   # (N, D)
         #y = self.x_embedder(y) + self.pos_embed # (N, T, D)    # 変更
         c = t                                # (N, D)    # 変更
+        x0 = x.clone()
         for block in self.blocks:
             x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c)       # (N, T, D)
+        x = x0 - x
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
         return x

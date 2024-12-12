@@ -27,6 +27,9 @@ from collections import OrderedDict
 import random
 from models_fix import DiT_models
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 class ProbLoss(nn.Module):
     def __init__(self, opt):
         assert opt["loss_type"] in ["bce", "hinge"]
@@ -154,10 +157,7 @@ def train(rank, gpu, args):
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
-    G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
-    gen_net = G_NET_ZOO[args.net_type]
     disc_net = [Discriminator_small, Discriminator_large]
-    print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = DiT_models[args.model](
         input_size=args.image_size,
         in_channels=args.num_channels,
@@ -192,7 +192,7 @@ def train(rank, gpu, args):
         optimizerD, args.num_epoch, eta_min=1e-5)
 
     # ddp
-    netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu], find_unused_parameters=True)
+    netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
     netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     """############### DELETE TO AVOID ERROR ###############"""
@@ -337,7 +337,7 @@ def train(rank, gpu, args):
             D_real = netD(x_t, t, x_tp1.detach()).view(-1)
             #print(f"{D_real[:5]=}")
             errD_real = F.softplus(-D_real).mean()
-            #errD_real = loss(D_real, "disc_real").mean()
+            #errD_real = loss(D_real, "disc_real")
             
             errD_real.backward(retain_graph=True)
 
@@ -355,7 +355,7 @@ def train(rank, gpu, args):
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             #print(f"{output[:5]=}")
             errD_fake = F.softplus(output).mean()
-            #errD_fake = loss(output, "disc_fake").mean()
+            #errD_fake = loss(output, "disc_fake")
             
             errD_fake.backward()
 
@@ -386,7 +386,7 @@ def train(rank, gpu, args):
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             errG = F.softplus(-output).mean()
-            #errG = loss(output, "gen").mean()
+            #errG = loss(output, "gen")
 
             # reconstructior loss
             if args.sigmoid_learning and args.rec_loss:
