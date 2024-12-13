@@ -91,7 +91,7 @@ def train(rank, gpu, args):
 
     # ddp
     netG = nn.parallel.DistributedDataParallel(
-        netG, device_ids=[gpu], find_unused_parameters=True)
+        netG, device_ids=[gpu])
     netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     # Wavelet Pooling

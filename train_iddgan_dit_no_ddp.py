@@ -336,8 +336,8 @@ def train(rank, gpu, args):
             # train with real
             D_real = netD(x_t, t, x_tp1.detach()).view(-1)
             #print(f"{D_real[:5]=}")
-            errD_real = F.softplus(-D_real).mean()
-            #errD_real = loss(D_real, "disc_real")
+            #errD_real = F.softplus(-D_real).mean()
+            errD_real = loss(D_real, "disc_real")
             
             errD_real.backward(retain_graph=True)
 
@@ -354,8 +354,8 @@ def train(rank, gpu, args):
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             #print(f"{output[:5]=}")
-            errD_fake = F.softplus(output).mean()
-            #errD_fake = loss(output, "disc_fake")
+            # errD_fake = F.softplus(output).mean()
+            errD_fake = loss(output, "disc_fake")
             
             errD_fake.backward()
 
@@ -385,8 +385,8 @@ def train(rank, gpu, args):
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            errG = F.softplus(-output).mean()
-            #errG = loss(output, "gen")
+            # errG = F.softplus(-output).mean()
+            errG = loss(output, "gen")
 
             # reconstructior loss
             if args.sigmoid_learning and args.rec_loss:
