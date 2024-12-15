@@ -70,7 +70,7 @@ def grad_penalty_call(args, D_real, x_t):
     ).mean()
 
     grad_penalty = args.r1_gamma / 2 * grad_penalty
-    return grad_penalty
+    grad_penalty.backward()
 
 
 # %%
