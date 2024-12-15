@@ -359,7 +359,7 @@ def train(rank, gpu, args):
             
             errD_fake.backward()
 
-            torch.nn.utils.clip_grad_norm_(netD.parameters(), 0.5)
+            #torch.nn.utils.clip_grad_norm_(netD.parameters(), 0.5)
 
             errD = errD_real + errD_fake
             # Update D
@@ -636,6 +636,87 @@ if __name__ == '__main__':
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
 
+    wandb.init(
+        project="IDDGAN_DiT",
+        name=args.exp,
+        # すべてのパラメータをログに記録
+        config={
+            "seed": args.seed,
+            "image_size": args.image_size,
+            "num_channels": args.num_channels,
+            "centered": args.centered,
+            "use_geometric": args.use_geometric,
+            "beta_min": args.beta_min,
+            "beta_max": args.beta_max,
+            "patch_size": args.patch_size,
+            "num_channels_dae": args.num_channels_dae,
+            "n_mlp": args.n_mlp,
+            "ch_mult": args.ch_mult,
+            "num_res_blocks": args.num_res_blocks,
+            "attn_resolutions": args.attn_resolutions,
+            "dropout": args.dropout,
+            "resamp_with_conv": args.resamp_with_conv,
+            "conditional": args.conditional,
+            "fir": args.fir,
+            "fir_kernel": args.fir_kernel,
+            "skip_rescale": args.skip_rescale,
+            "resblock_type": args.resblock_type,
+            "progressive": args.progressive,
+            "progressive_input": args.progressive_input,
+            "progressive_combine": args.progressive_combine,
+            "embedding_type": args.embedding_type,
+            "fourier_scale": args.fourier_scale,
+            "not_use_tanh": args.not_use_tanh,
+            "exp": args.exp,
+            "dataset": args.dataset,
+            "datadir": args.datadir,
+            "nz": args.nz,
+            "num_timesteps": args.num_timesteps,
+            "z_emb_dim": args.z_emb_dim,
+            "t_emb_dim": args.t_emb_dim,
+            "batch_size": args.batch_size,
+            "num_epoch": args.num_epoch,
+            "ngf": args.ngf,
+            "lr_g": args.lr_g,
+            "lr_d": args.lr_d,
+            "beta1": args.beta1,
+            "beta2": args.beta2,
+            "no_lr_decay": args.no_lr_decay,
+            "use_ema": args.use_ema,
+            "ema_decay": args.ema_decay,
+            "r1_gamma": args.r1_gamma,
+            "lazy_reg": args.lazy_reg,
+            "current_resolution": args.current_resolution,
+            "use_pytorch_wavelet": args.use_pytorch_wavelet,
+            "rec_loss": args.rec_loss,
+            "net_type": args.net_type,
+            "num_disc_layers": args.num_disc_layers,
+            "no_use_fbn": args.no_use_fbn,
+            "no_use_freq": args.no_use_freq,
+            "no_use_residual": args.no_use_residual,
+            "save_content": args.save_content,
+            "save_content_every": args.save_content_every,
+            "save_ckpt_every": args.save_ckpt_every,
+            "num_proc_node": args.num_proc_node,
+            "num_process_per_node": args.num_process_per_node,
+            "node_rank": args.node_rank,
+            "local_rank": args.local_rank,
+            "master_address": args.master_address,
+            "master_port": args.master_port,
+            "num_workers": args.num_workers,
+            "scale_factor": args.scale_factor,
+            "img_rec_loss": args.img_rec_loss,
+            "AutoEncoder_config": args.AutoEncoder_config,
+            "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
+            "sigmoid_learning": args.sigmoid_learning,
+            "class_conditional": args.class_conditional,
+            "loss_type": args.loss_type,
+            "lambda_fake": args.lambda_fake,
+            "lambda_real": args.lambda_real,
+            "model": args.model
+        }
+    )
+
     if size > 1:
         processes = []
         for rank in range(size):
@@ -649,91 +730,10 @@ if __name__ == '__main__':
                 global_rank, global_size, train, args))
             p.start()
             processes.append(p)
-
         for p in processes:
             p.join()
     else:
         print('starting in debug mode')
-        wandb.init(
-            project="IDDGAN_DiT",
-            name=args.exp,
-            # すべてのパラメータをログに記録
-            config={
-                "seed": args.seed,
-                "image_size": args.image_size,
-                "num_channels": args.num_channels,
-                "centered": args.centered,
-                "use_geometric": args.use_geometric,
-                "beta_min": args.beta_min,
-                "beta_max": args.beta_max,
-                "patch_size": args.patch_size,
-                "num_channels_dae": args.num_channels_dae,
-                "n_mlp": args.n_mlp,
-                "ch_mult": args.ch_mult,
-                "num_res_blocks": args.num_res_blocks,
-                "attn_resolutions": args.attn_resolutions,
-                "dropout": args.dropout,
-                "resamp_with_conv": args.resamp_with_conv,
-                "conditional": args.conditional,
-                "fir": args.fir,
-                "fir_kernel": args.fir_kernel,
-                "skip_rescale": args.skip_rescale,
-                "resblock_type": args.resblock_type,
-                "progressive": args.progressive,
-                "progressive_input": args.progressive_input,
-                "progressive_combine": args.progressive_combine,
-                "embedding_type": args.embedding_type,
-                "fourier_scale": args.fourier_scale,
-                "not_use_tanh": args.not_use_tanh,
-                "exp": args.exp,
-                "dataset": args.dataset,
-                "datadir": args.datadir,
-                "nz": args.nz,
-                "num_timesteps": args.num_timesteps,
-                "z_emb_dim": args.z_emb_dim,
-                "t_emb_dim": args.t_emb_dim,
-                "batch_size": args.batch_size,
-                "num_epoch": args.num_epoch,
-                "ngf": args.ngf,
-                "lr_g": args.lr_g,
-                "lr_d": args.lr_d,
-                "beta1": args.beta1,
-                "beta2": args.beta2,
-                "no_lr_decay": args.no_lr_decay,
-                "use_ema": args.use_ema,
-                "ema_decay": args.ema_decay,
-                "r1_gamma": args.r1_gamma,
-                "lazy_reg": args.lazy_reg,
-                "current_resolution": args.current_resolution,
-                "use_pytorch_wavelet": args.use_pytorch_wavelet,
-                "rec_loss": args.rec_loss,
-                "net_type": args.net_type,
-                "num_disc_layers": args.num_disc_layers,
-                "no_use_fbn": args.no_use_fbn,
-                "no_use_freq": args.no_use_freq,
-                "no_use_residual": args.no_use_residual,
-                "save_content": args.save_content,
-                "save_content_every": args.save_content_every,
-                "save_ckpt_every": args.save_ckpt_every,
-                "num_proc_node": args.num_proc_node,
-                "num_process_per_node": args.num_process_per_node,
-                "node_rank": args.node_rank,
-                "local_rank": args.local_rank,
-                "master_address": args.master_address,
-                "master_port": args.master_port,
-                "num_workers": args.num_workers,
-                "scale_factor": args.scale_factor,
-                "img_rec_loss": args.img_rec_loss,
-                "AutoEncoder_config": args.AutoEncoder_config,
-                "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
-                "sigmoid_learning": args.sigmoid_learning,
-                "class_conditional": args.class_conditional,
-                "loss_type": args.loss_type,
-                "lambda_fake": args.lambda_fake,
-                "lambda_real": args.lambda_real,
-                "model": args.model
-            }
-        )
         init_processes(0, size, train, args)
         #train(0, 0, args)
         wandb.finish()

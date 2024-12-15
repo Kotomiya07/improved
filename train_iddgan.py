@@ -611,10 +611,11 @@ if __name__ == '__main__':
             "master_port": args.master_port,
             "num_workers": args.num_workers,
             "scale_factor": args.scale_factor,
+            "img_rec_loss": args.img_rec_loss,
             "AutoEncoder_config": args.AutoEncoder_config,
             "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
             "sigmoid_learning": args.sigmoid_learning,
-            "class_conditional": args.class_conditional
+            "class_conditional": args.class_conditional,
         }
     )
 
