@@ -237,8 +237,8 @@ if [[ $MODE == train ]]; then
 			--model DiT-XL/2
 	
 	elif [[ $DATASET == cifar10_dit_no_ddp_s2 ]]; then
-		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-s2-skip-connection-predict-noise-plus --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
-			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-s2-skip-connection-predict-noise-plus-epoch3000 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 3000 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.2e-4 --lr_g 1.6e-4 --lazy_reg 15 \
 			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
 			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \

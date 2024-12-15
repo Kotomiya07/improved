@@ -10,6 +10,8 @@ from diffusion import get_time_schedule, Posterior_Coefficients, \
 from pytorch_fid.fid_score import calculate_fid_given_paths
 #from pytorch_wavelets import DWTInverse
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp, WaveletNCSNpp
+from tqdm import tqdm
+
 
 
 # %%
@@ -138,7 +140,7 @@ def sample_and_test(args):
         exit(0)
 
     if args.compute_fid:
-        for i in range(iters_needed):
+        for i in tqdm(range(iters_needed)):
             with torch.no_grad():
                 x_t_1 = torch.randn(
                     args.batch_size, args.num_channels, args.image_size, args.image_size).to(device)
