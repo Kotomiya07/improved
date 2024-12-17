@@ -39,7 +39,7 @@ if [[ $MODE == train ]]; then
 			--rec_loss \
 			--sigmoid_learning
 	
-	elif [[ $DATASET == cifar10_no_ddp ]]; then
+	elif [[ $DATASET == cifar10-no-ddp ]]; then
 		python3 train_iddgan_no_ddp.py --dataset cifar10 --exp cifar10-no-ddp --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
@@ -52,7 +52,7 @@ if [[ $MODE == train ]]; then
 			--rec_loss \
 			--sigmoid_learning
 	
-	elif [[ $DATASET == cifar10_a100_01 ]]; then
+	elif [[ $DATASET == cifar10-a100-01 ]]; then
 		accelerate launch --multi_gpu --num_processes 2 --mixed_precision fp16 train_iddgan.py --dataset cifar10 --exp cifar10-ddp --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
@@ -66,7 +66,7 @@ if [[ $MODE == train ]]; then
 			--sigmoid_learning \
 			--num_proc_node 2 --node_rank 0 --master_address 10.111.5.21
 	
-	elif [[ $DATASET == cifar10_a100_02 ]]; then
+	elif [[ $DATASET == cifar10-a100-02 ]]; then
 		torchrun --nnodes=2 --nproc-per-node=1 --node-rank=1 --rdzv-id=719 --rdzv-backend=c10d --rdzv-endpoint=10.111.5.21:50719 --master-port 50719 train_iddgan.py --dataset cifar10 --exp cifar10-ddp --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
@@ -80,7 +80,7 @@ if [[ $MODE == train ]]; then
 			--sigmoid_learning \
 			--num_proc_node 2 --node_rank 1 --master_address 10.111.5.21
 	
-	elif [[ $DATASET == cifar10_dit ]]; then
+	elif [[ $DATASET == cifar10-dit ]]; then
 		python3 train_iddgan_dit.py --dataset cifar10 --exp cifar10-dit --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 0.8e-4 --lr_g 1.6e-4 --lazy_reg 15 \
@@ -93,7 +93,7 @@ if [[ $MODE == train ]]; then
 			--rec_loss \
 			--sigmoid_learning
 	
-	elif [[ $DATASET == cifar10_dit_fix ]]; then
+	elif [[ $DATASET == cifar10-dit-fix ]]; then
 		python3 train_iddgan.py --dataset cifar10 --exp cifar10-dit-fix-3 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
@@ -107,7 +107,7 @@ if [[ $MODE == train ]]; then
 			--sigmoid_learning \
 			--resblock_type biggan_with_dit
 	
-    elif [[ $DATASET == cifar10_dit_no_ddp_ss1 ]]; then
+    elif [[ $DATASET == cifar10-dit-no-ddp-ss1 ]]; then
 		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-ss1-hinge --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.2e-4 --lr_g 1.6e-4 --lazy_reg 15 \
@@ -122,7 +122,7 @@ if [[ $MODE == train ]]; then
 			--model DiT-SS/1 \
 			--loss_type hinge
 
-    elif [[ $DATASET == cifar10_dit_no_ddp_s2_bce ]]; then
+    elif [[ $DATASET == cifar10-dit-no-ddp-s2-bce ]]; then
 		python3 train_iddgan_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-s2-bce --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.2e-4 --lr_g 1.6e-4 --lazy_reg 15 \
@@ -492,7 +492,21 @@ if [[ $MODE == train ]]; then
 			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
 			--scale_factor 6.0 \
 			--no_lr_decay \
-			--sigmoid_learning 
+			--sigmoid_learning
+
+	elif [[ $DATASET == celeba-256-dit-s2 ]]; then
+		python3 train_iddgan_dit_celeba.py --dataset celeba_256 --image_size 256 --exp celeba-256-dit-s2 --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \
+			--num_res_blocks 2 --batch_size 32 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+			--nz 100 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/celeba/celeba-lmdb/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 64 --attn_resolution 16 --num_disc_layers 4 --rec_loss \
+			--save_content_every 5 \
+			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
+			--scale_factor 6.0 \
+			--no_lr_decay \
+			--sigmoid_learning \
+			--model DiT-S/2
 	
 	elif [[ $DATASET == celeba_256_dit_no_ddp_xl2 ]]; then
 		python3 train_iddgan_dit_no_ddp.py --dataset celeba_256 --image_size 256 --exp celeba-256-dit-no-dddp-xl2 --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \

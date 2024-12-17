@@ -27,6 +27,9 @@ from collections import OrderedDict
 import random
 from models_fix import DiT_models
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 class ProbLoss(nn.Module):
     def __init__(self, opt):
         assert opt["loss_type"] in ["bce", "hinge"]
@@ -154,16 +157,12 @@ def train(rank, gpu, args):
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
-    G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
-    gen_net = G_NET_ZOO[args.net_type]
     disc_net = [Discriminator_small, Discriminator_large]
-    print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = DiT_models[args.model](
         input_size=args.image_size,
         in_channels=args.num_channels,
     ).to(device)
-    #netG = torch.compile(netG)
-
+    
     if args.dataset in ['cifar10', 'stl10']:
         netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
                            t_emb_dim=args.t_emb_dim,
@@ -289,12 +288,20 @@ def train(rank, gpu, args):
     update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
     ema.eval()
 
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+
+    start_epoch = torch.cuda.Event(enable_timing=True)
+    end_epoch = torch.cuda.Event(enable_timing=True)
+
+
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
-
+        start_epoch.record()
         for iteration, (x, y) in enumerate(data_loader):
-            #optimizerD.zero_grad()
-            #optimizerG.zero_grad()
+            start.record()
+            optimizerD.zero_grad()
+            optimizerG.zero_grad()
 
             #requires_grad(netD)
             for p in netD.parameters():
@@ -328,8 +335,9 @@ def train(rank, gpu, args):
 
             # train with real
             D_real = netD(x_t, t, x_tp1.detach()).view(-1)
+            #print(f"{D_real[:5]=}")
             errD_real = F.softplus(-D_real).mean()
-            #errD_real = loss(D_real, "disc_real").mean()
+            #errD_real = loss(D_real, "disc_real")
             
             errD_real.backward(retain_graph=True)
 
@@ -345,12 +353,13 @@ def train(rank, gpu, args):
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
+            #print(f"{output[:5]=}")
             errD_fake = F.softplus(output).mean()
-            #errD_fake = loss(output, "disc_fake").mean()
+            #errD_fake = loss(output, "disc_fake")
             
             errD_fake.backward()
 
-            torch.nn.utils.clip_grad_norm_(netD.parameters(), 0.5)
+            #torch.nn.utils.clip_grad_norm_(netD.parameters(), 0.5)
 
             errD = errD_real + errD_fake
             # Update D
@@ -377,7 +386,7 @@ def train(rank, gpu, args):
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             errG = F.softplus(-output).mean()
-            #errG = loss(output, "gen").mean()
+            #errG = loss(output, "gen")
 
             # reconstructior loss
             if args.sigmoid_learning and args.rec_loss:
@@ -395,18 +404,23 @@ def train(rank, gpu, args):
             torch.nn.utils.clip_grad_norm_(netG.parameters(), 0.5)
             optimizerG.step()
 
+            end.record()
+            torch.cuda.synchronize()
+
             global_step += 1
-            if iteration % 100 == 0:
-                if rank == 0:
-                    if args.sigmoid_learning:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, alpha: {}'.format(
-                            epoch, iteration, errG.item(), errD.item(), alpha[epoch]))
-                    elif args.rec_loss:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, rec_loss: {}'.format(
-                            epoch, iteration, errG.item(), errD.item(), rec_loss.item()))
-                    else:   
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
-                            epoch, iteration, errG.item(), errD.item()))
+            if rank == 0:
+                iter_time = start.elapsed_time(end)
+                if args.sigmoid_learning:
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] alpha[{:.4f}]'.format(
+                        epoch, iteration, iter_time, errG.item(), errD.item(), alpha[epoch]), end="")
+                elif args.rec_loss:
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] rec_loss[{:.4f}]'.format(
+                        epoch, iteration, iter_time, errG.item(), errD.item(), rec_loss.item()), end="")
+                else:   
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}]'.format(
+                        epoch, iteration, iter_time, errG.item(), errD.item()), end="")
+
+                wandb.log({"G_loss_iter": errG.item(), "D_loss_iter": errD.item(), "iter_time": iter_time})
 
         if not args.no_lr_decay:
 
@@ -414,7 +428,11 @@ def train(rank, gpu, args):
             schedulerD.step()
 
         if rank == 0:
-            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
+            end_epoch.record()
+            torch.cuda.synchronize()
+            epoch_time = start_epoch.elapsed_time(end_epoch)
+            print("\nEpoch time: {:.3f} s".format(epoch_time / 1000))
+            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "epoch_time": epoch_time / 1000})
             ########################################
             x_t_1 = torch.randn_like(posterior)
             fake_sample = sample_from_model(
@@ -436,6 +454,9 @@ def train(rank, gpu, args):
                 exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)))
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
+
+            wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])], "real_data": [wandb.Image(real_data[:4])]})
+            
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
@@ -615,6 +636,87 @@ if __name__ == '__main__':
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
 
+    wandb.init(
+        project="IDDGAN_DiT",
+        name=args.exp,
+        # すべてのパラメータをログに記録
+        config={
+            "seed": args.seed,
+            "image_size": args.image_size,
+            "num_channels": args.num_channels,
+            "centered": args.centered,
+            "use_geometric": args.use_geometric,
+            "beta_min": args.beta_min,
+            "beta_max": args.beta_max,
+            "patch_size": args.patch_size,
+            "num_channels_dae": args.num_channels_dae,
+            "n_mlp": args.n_mlp,
+            "ch_mult": args.ch_mult,
+            "num_res_blocks": args.num_res_blocks,
+            "attn_resolutions": args.attn_resolutions,
+            "dropout": args.dropout,
+            "resamp_with_conv": args.resamp_with_conv,
+            "conditional": args.conditional,
+            "fir": args.fir,
+            "fir_kernel": args.fir_kernel,
+            "skip_rescale": args.skip_rescale,
+            "resblock_type": args.resblock_type,
+            "progressive": args.progressive,
+            "progressive_input": args.progressive_input,
+            "progressive_combine": args.progressive_combine,
+            "embedding_type": args.embedding_type,
+            "fourier_scale": args.fourier_scale,
+            "not_use_tanh": args.not_use_tanh,
+            "exp": args.exp,
+            "dataset": args.dataset,
+            "datadir": args.datadir,
+            "nz": args.nz,
+            "num_timesteps": args.num_timesteps,
+            "z_emb_dim": args.z_emb_dim,
+            "t_emb_dim": args.t_emb_dim,
+            "batch_size": args.batch_size,
+            "num_epoch": args.num_epoch,
+            "ngf": args.ngf,
+            "lr_g": args.lr_g,
+            "lr_d": args.lr_d,
+            "beta1": args.beta1,
+            "beta2": args.beta2,
+            "no_lr_decay": args.no_lr_decay,
+            "use_ema": args.use_ema,
+            "ema_decay": args.ema_decay,
+            "r1_gamma": args.r1_gamma,
+            "lazy_reg": args.lazy_reg,
+            "current_resolution": args.current_resolution,
+            "use_pytorch_wavelet": args.use_pytorch_wavelet,
+            "rec_loss": args.rec_loss,
+            "net_type": args.net_type,
+            "num_disc_layers": args.num_disc_layers,
+            "no_use_fbn": args.no_use_fbn,
+            "no_use_freq": args.no_use_freq,
+            "no_use_residual": args.no_use_residual,
+            "save_content": args.save_content,
+            "save_content_every": args.save_content_every,
+            "save_ckpt_every": args.save_ckpt_every,
+            "num_proc_node": args.num_proc_node,
+            "num_process_per_node": args.num_process_per_node,
+            "node_rank": args.node_rank,
+            "local_rank": args.local_rank,
+            "master_address": args.master_address,
+            "master_port": args.master_port,
+            "num_workers": args.num_workers,
+            "scale_factor": args.scale_factor,
+            "img_rec_loss": args.img_rec_loss,
+            "AutoEncoder_config": args.AutoEncoder_config,
+            "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
+            "sigmoid_learning": args.sigmoid_learning,
+            "class_conditional": args.class_conditional,
+            "loss_type": args.loss_type,
+            "lambda_fake": args.lambda_fake,
+            "lambda_real": args.lambda_real,
+            "model": args.model
+        }
+    )
+
     if size > 1:
         processes = []
         for rank in range(size):
@@ -628,91 +730,10 @@ if __name__ == '__main__':
                 global_rank, global_size, train, args))
             p.start()
             processes.append(p)
-
         for p in processes:
             p.join()
     else:
         print('starting in debug mode')
-        wandb.init(
-            project="IDDGAN_DiT",
-            name=args.exp,
-            # すべてのパラメータをログに記録
-            config={
-                "seed": args.seed,
-                "image_size": args.image_size,
-                "num_channels": args.num_channels,
-                "centered": args.centered,
-                "use_geometric": args.use_geometric,
-                "beta_min": args.beta_min,
-                "beta_max": args.beta_max,
-                "patch_size": args.patch_size,
-                "num_channels_dae": args.num_channels_dae,
-                "n_mlp": args.n_mlp,
-                "ch_mult": args.ch_mult,
-                "num_res_blocks": args.num_res_blocks,
-                "attn_resolutions": args.attn_resolutions,
-                "dropout": args.dropout,
-                "resamp_with_conv": args.resamp_with_conv,
-                "conditional": args.conditional,
-                "fir": args.fir,
-                "fir_kernel": args.fir_kernel,
-                "skip_rescale": args.skip_rescale,
-                "resblock_type": args.resblock_type,
-                "progressive": args.progressive,
-                "progressive_input": args.progressive_input,
-                "progressive_combine": args.progressive_combine,
-                "embedding_type": args.embedding_type,
-                "fourier_scale": args.fourier_scale,
-                "not_use_tanh": args.not_use_tanh,
-                "exp": args.exp,
-                "dataset": args.dataset,
-                "datadir": args.datadir,
-                "nz": args.nz,
-                "num_timesteps": args.num_timesteps,
-                "z_emb_dim": args.z_emb_dim,
-                "t_emb_dim": args.t_emb_dim,
-                "batch_size": args.batch_size,
-                "num_epoch": args.num_epoch,
-                "ngf": args.ngf,
-                "lr_g": args.lr_g,
-                "lr_d": args.lr_d,
-                "beta1": args.beta1,
-                "beta2": args.beta2,
-                "no_lr_decay": args.no_lr_decay,
-                "use_ema": args.use_ema,
-                "ema_decay": args.ema_decay,
-                "r1_gamma": args.r1_gamma,
-                "lazy_reg": args.lazy_reg,
-                "current_resolution": args.current_resolution,
-                "use_pytorch_wavelet": args.use_pytorch_wavelet,
-                "rec_loss": args.rec_loss,
-                "net_type": args.net_type,
-                "num_disc_layers": args.num_disc_layers,
-                "no_use_fbn": args.no_use_fbn,
-                "no_use_freq": args.no_use_freq,
-                "no_use_residual": args.no_use_residual,
-                "save_content": args.save_content,
-                "save_content_every": args.save_content_every,
-                "save_ckpt_every": args.save_ckpt_every,
-                "num_proc_node": args.num_proc_node,
-                "num_process_per_node": args.num_process_per_node,
-                "node_rank": args.node_rank,
-                "local_rank": args.local_rank,
-                "master_address": args.master_address,
-                "master_port": args.master_port,
-                "num_workers": args.num_workers,
-                "scale_factor": args.scale_factor,
-                "img_rec_loss": args.img_rec_loss,
-                "AutoEncoder_config": args.AutoEncoder_config,
-                "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
-                "sigmoid_learning": args.sigmoid_learning,
-                "class_conditional": args.class_conditional,
-                "loss_type": args.loss_type,
-                "lambda_fake": args.lambda_fake,
-                "lambda_real": args.lambda_real,
-                "model": args.model
-            }
-        )
         init_processes(0, size, train, args)
         #train(0, 0, args)
         wandb.finish()
