@@ -39,6 +39,34 @@ if [[ $MODE == train ]]; then
 			--rec_loss \
 			--sigmoid_learning
 	
+	elif [[ $DATASET == cifar10-bCR ]]; then
+            python3 train_iddgan_bCR.py --dataset cifar10 --exp cifar10-bCR-lambda10 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 2000 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning \
+			--lambda_fake 10.0 \
+			--lambda_real 10.0
+
+	elif [[ $DATASET == cifar10-vq ]]; then
+		python3 train_iddgan_celeba.py --dataset cifar10 --exp cifar10-vq-sf6 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 2000 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 6.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/vq-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/vq-f2.ckpt \
+			--rec_loss \
+			--sigmoid_learning
+
 	elif [[ $DATASET == cifar10-no-ddp ]]; then
 		python3 train_iddgan_no_ddp.py --dataset cifar10 --exp cifar10-no-ddp --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
@@ -305,19 +333,6 @@ if [[ $MODE == train ]]; then
 			--rec_loss \
 			--sigmoid_learning \
 			--resblock_type biggan_with_dit
-
-	elif [[ $DATASET == cifar10_bCR ]]; then
-            python3 train_iddgan_bCR.py --dataset cifar10_no_transform --exp cifar10-bCR-fix --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
-			--num_res_blocks 2 --batch_size 256 --num_epoch 1700 --ngf 64 --nz 100 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
-			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
-			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
-			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
-			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
-			--no_lr_decay \
-			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
-			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
-			--rec_loss \
-			--sigmoid_learning
     
     elif [[ $DATASET == cifar10_bCR_hinge ]]; then
             python3 train_iddgan_bCR.py --dataset cifar10_no_transform --exp cifar10-bCR-fix-hinge --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
@@ -487,6 +502,45 @@ if [[ $MODE == train ]]; then
 			--nz 100 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/celeba/celeba-lmdb/ \
 			--master_port $MASTER_PORT --num_process_per_node $GPUS \
 			--current_resolution 64 --attn_resolution 16 --num_disc_layers 4 --rec_loss \
+			--save_content_every 5 \
+			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
+			--scale_factor 6.0 \
+			--no_lr_decay \
+			--sigmoid_learning
+	
+	elif [[ $DATASET == celeba-128 ]]; then
+		python3 train_iddgan_celeba.py --dataset celeba_128 --image_size 128 --exp celeba-128-vqf4 --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+			--nz 100 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/celeba/celeba-lmdb/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 32 --attn_resolution 16 --num_disc_layers 4 --rec_loss \
+			--save_content_every 1 \
+			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
+			--scale_factor 6.0 \
+			--no_lr_decay \
+			--sigmoid_learning
+	
+	elif [[ $DATASET == celeba-64 ]]; then
+		python3 train_iddgan_celeba.py --dataset celeba_64 --image_size 64 --exp celeba-64-vqf4 --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+			--nz 100 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/celeba/celeba-lmdb/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 16 --attn_resolution 16 --num_disc_layers 4 --rec_loss \
+			--save_content_every 1 \
+			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
+			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
+			--scale_factor 6.0 \
+			--no_lr_decay \
+			--sigmoid_learning
+	
+	elif [[ $DATASET == celeba-32 ]]; then
+		python3 train_iddgan_celeba.py --dataset celeba_32 --image_size 32 --exp celeba-32-vqf4 --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 --num_timesteps 2 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
+			--nz 100 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/celeba/celeba-lmdb/ \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS \
+			--current_resolution 8 --attn_resolution 16 --num_disc_layers 3 --rec_loss \
 			--save_content_every 5 \
 			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
 			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \

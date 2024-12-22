@@ -80,7 +80,7 @@ except ImportError:
     from .inception import InceptionV3
 
 parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
-parser.add_argument('--batch-size', type=int, default=50,
+parser.add_argument('--batch_size', type=int, default=50,
                     help='Batch size to use')
 parser.add_argument('--device', type=str, default=None,
                     help='Device to use. Like cuda, cuda:0 or cpu')
@@ -88,7 +88,7 @@ parser.add_argument('--dims', type=int, default=2048,
                     choices=list(InceptionV3.BLOCK_INDEX_BY_DIM),
                     help=('Dimensionality of Inception features to use. '
                           'By default, uses pool3 features'))
-parser.add_argument('path', type=str, nargs=2,
+parser.add_argument('--path', type=str, nargs=2,
                     help=('Paths to the generated images or '
                           'to .npz statistic files'))
 

@@ -100,7 +100,7 @@ if __name__ == '__main__':
     parser.add_argument('--sample_dir', default='./saved_samples/', help='path to saved images')
     opt = parser.parse_args()
 
-    data = np.load(opt.sample_dir)
+    data = np.load(opt.sample_dir, allow_pickle=True)
     data = np.clip(data, 0, 255)
     m, s = get_inception_score(data, splits=1)
 

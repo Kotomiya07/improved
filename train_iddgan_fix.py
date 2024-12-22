@@ -52,6 +52,7 @@ def grad_penalty_call(args, D_real, x_t):
     grad_penalty = args.r1_gamma / 2 * grad_penalty
     grad_penalty.backward()
 
+
 # %%
 def train(rank, gpu, args):
     from EMA import EMA
@@ -141,6 +142,7 @@ def train(rank, gpu, args):
 
     AutoEncoder = instantiate_from_config(config['model'])
 
+
     checkpoint = torch.load(ckpt_path, map_location=device)
     AutoEncoder.load_state_dict(checkpoint['state_dict'])
     AutoEncoder.eval()
@@ -199,17 +201,12 @@ def train(rank, gpu, args):
     print(f"Generator Parameters: {sum(p.numel() for p in netG.parameters()):,}")
     print(f"Discriminator Parameters: {sum(p.numel() for p in netD.parameters()):,}")
 
-    list_augments = [
-        torchvision.transforms.RandomCrop(args.image_size, padding=4, padding_mode="reflect"), # ランダムな位置で切り取り
-        torchvision.transforms.RandomResizedCrop(size=args.image_size, scale=(0.8, 1.2)),    # ズームインとズームアウト
-        torchvision.transforms.RandomRotation(degrees=30),                                   # 左右30度までのローテート
-    ]
-
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
 
     start_epoch = torch.cuda.Event(enable_timing=True)
     end_epoch = torch.cuda.Event(enable_timing=True)
+
 
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
@@ -224,12 +221,12 @@ def train(rank, gpu, args):
                 p.requires_grad = False
 
             # sample from p(x_0)
-            real_x0 = x.to(device, non_blocking=True)
+            x0 = x.to(device, non_blocking=True)
 
             """################# Change here: Encoder #################"""
             with torch.no_grad():
-                posterior_real = AutoEncoder.encode(real_x0)
-                real_data = posterior_real.sample().detach()
+                posterior = AutoEncoder.encode(x0)
+                real_data = posterior.sample().detach()
             #print("MIN:{}, MAX:{}".format(real_data.min(), real_data.max()))
             real_data = real_data / args.scale_factor #300.0  # [-1, 1]
             
@@ -241,50 +238,28 @@ def train(rank, gpu, args):
             t = torch.randint(0, args.num_timesteps,
                               (real_data.size(0),), device=device)
 
-            real_x_t, real_x_tp1 = q_sample_pairs(coeff, real_data, t)
-            real_x_t.requires_grad = True
+            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
+            x_t.requires_grad = True
 
-            # Train discriminator with real data
-            D_real = netD(real_x_t, t, real_x_tp1.detach()).view(-1)
+            # train with real
+            D_real = netD(x_t, t, x_tp1.detach()).view(-1)
             errD_real = F.softplus(-D_real).mean()
-
-            # Apply consistency regularization for real data
-            augment = torchvision.transforms.RandomChoice(list_augments)
-            if args.lambda_real > 0:
-                # Apply augmentation to real data (define your augmentation function t)
-                augmented_real_data = augment(real_data.detach())
-                
-                augmented_real_x_t, augmented_real_x_tp1 = q_sample_pairs(coeff, augmented_real_data, t)
-                D_augmented_real = netD(augmented_real_x_t, t, augmented_real_x_tp1.detach()).view(-1)
-                errD_real_consistency = F.mse_loss(D_real, D_augmented_real)
-                errD_real = errD_real + args.lambda_real * errD_real_consistency
 
             errD_real.backward(retain_graph=True)
 
             if args.lazy_reg is None:
-                grad_penalty_call(args, D_real, real_x_t)
+                grad_penalty_call(args, D_real, x_t)
             else:
                 if global_step % args.lazy_reg == 0:
-                    grad_penalty_call(args, D_real, real_x_t)
+                    grad_penalty_call(args, D_real, x_t)
 
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
-            fake_x0_predict = netG(real_x_tp1.detach(), t, latent_z) # Use real_x_tp1 and t for generating fake samples
-            
-            fake_x_t, fake_x_tp1 = q_sample_pairs(coeff, fake_x0_predict, t)
+            x_0_predict = netG(x_tp1.detach(), t, latent_z)
+            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
-            output = netD(fake_x_t, t, fake_x_tp1.detach()).view(-1)
+            output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             errD_fake = F.softplus(output).mean()
-
-            # Apply consistency regularization for fake data (bCR)
-            if args.lambda_fake > 0:
-                # Apply augmentation to generated fake data (define your augmentation function T_fake)
-                augmented_fake_x0_predict = augment(fake_x0_predict.detach()) # Detach to avoid gradient flow through generator
-                
-                augmented_fake_x_t, augmented_fake_x_tp1 = q_sample_pairs(coeff, augmented_fake_x0_predict, t)
-                D_augmented_fake = netD(augmented_fake_x_t, t, augmented_fake_x_tp1.detach()).view(-1)
-                errD_fake_consistency = F.mse_loss(output, D_augmented_fake)
-                errD_fake = errD_fake + args.lambda_fake * errD_fake_consistency
 
             errD_fake.backward()
 
@@ -300,18 +275,18 @@ def train(rank, gpu, args):
                 p.requires_grad = True
             netG.zero_grad()
 
-            t_gen = torch.randint(0, args.num_timesteps,
+            t = torch.randint(0, args.num_timesteps,
                               (real_data.size(0),), device=device)
-            x_t_gen, x_tp1_gen = q_sample_pairs(coeff, real_data, t_gen) # Use real data for generator training
+            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
 
             latent_z = torch.randn(batch_size, nz, device=device)
-            x_0_predict = netG(x_tp1_gen.detach(), t_gen, latent_z)
-            x_pos_predict = sample_posterior(pos_coeff, x_0_predict, x_tp1_gen, t_gen)
-            
-            output = netD(x_pos_predict, t_gen, x_tp1_gen.detach()).view(-1)
+            x_0_predict = netG(x_tp1.detach(), t, latent_z)
+            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
+
+            output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             errG = F.softplus(-output).mean()
 
-            # reconstruction loss
+            # reconstructior loss
             if args.sigmoid_learning and args.rec_loss:
                 ######alpha
                 rec_loss = F.l1_loss(x_0_predict, real_data)
@@ -328,6 +303,7 @@ def train(rank, gpu, args):
             end.record()
             torch.cuda.synchronize()
             #print("\rIteration time: {:.0f} ms".format(start.elapsed_time(end)), end="")
+
 
             global_step += 1
             #if iteration % 100 == 0:
@@ -357,7 +333,7 @@ def train(rank, gpu, args):
             print("\nEpoch time: {:.3f} s".format(epoch_time / 1000))
             wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "epoch_time": epoch_time / 1000})
             ########################################
-            x_t_1 = torch.randn_like(posterior_real.sample())
+            x_t_1 = torch.randn_like(posterior.sample())
             fake_sample = sample_from_model(
                 pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 
@@ -378,6 +354,7 @@ def train(rank, gpu, args):
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
             
+            # TODO: wandbに画像を保存
             wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])], "real_data": [wandb.Image(real_data[:4])]})
             
 
@@ -540,11 +517,6 @@ if __name__ == '__main__':
     parser.add_argument("--sigmoid_learning", action="store_true")
     parser.add_argument("--class_conditional", action="store_true", default=False)
     
-    # bCRのハイパーパラメータを追加
-    parser.add_argument('--lambda_fake', type=float, default=10.0, help='bCR regularization strength for fake images')
-    parser.add_argument('--lambda_real', type=float, default=10.0, help='bCR regularization strength for real images')
-    
-    
     args = parser.parse_args()
 
     args.world_size = args.num_proc_node * args.num_process_per_node
@@ -641,7 +613,6 @@ if __name__ == '__main__':
             processes.append(p)
 
         for p in processes:
-            
             p.join()
     else:
         print('starting in debug mode')
