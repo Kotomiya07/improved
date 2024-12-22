@@ -23,3 +23,4 @@ __pycache__/
 /score_sde/upfirdn2d_op.egg-info/
 /score_sde/*.so
 *.txt
+*.npy
