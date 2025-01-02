@@ -24,6 +24,7 @@ import wandb
 from copy import deepcopy
 from collections import OrderedDict
 from PIL import Image as PILImage
+from torchmetrics.image.fid import FrechetInceptionDistance
 
 def load_model_from_config(config_path, ckpt):
     print(f"Loading model from {ckpt}")
@@ -106,35 +107,14 @@ def train(rank, gpu, args):
 
     if args.use_ema:
         optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
-    
-    #ema = deepcopy(netG).to(device)  # Create an EMA of the model for use after training
-    #requires_grad(ema, False)
-
-    schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizerG, args.num_epoch, eta_min=1e-5)
-    schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizerD, args.num_epoch, eta_min=1e-5)
 
     # ddp
     netG = nn.parallel.DistributedDataParallel(
         netG, device_ids=[gpu])
     netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
-    """############### DELETE TO AVOID ERROR ###############"""
-    # Wavelet Pooling
-    #if not args.use_pytorch_wavelet:
-    #    dwt = DWT_2D("haar")
-    #    iwt = IDWT_2D("haar")
-    #else:
-    #    dwt = DWTForward(J=1, mode='zero', wave='haar').cuda()
-    #    iwt = DWTInverse(mode='zero', wave='haar').cuda()
-        
-    
-    #load encoder and decoder
-    config_path = args.AutoEncoder_config 
-    ckpt_path = args.AutoEncoder_ckpt 
-    
-    #if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
+    config_path = args.AutoEncoder_config
+    ckpt_path = args.AutoEncoder_ckpt
 
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
@@ -145,11 +125,7 @@ def train(rank, gpu, args):
     AutoEncoder.load_state_dict(checkpoint['state_dict'])
     AutoEncoder.eval()
     AutoEncoder.to(device)
-    
-    #else:
-    #    AutoEncoder = load_model_from_config(config_path, ckpt_path)
-    """############### END DELETING ###############"""
-    
+
     num_levels = int(np.log2(args.ori_image_size // args.current_resolution))
 
     exp = args.exp
@@ -191,9 +167,6 @@ def train(rank, gpu, args):
     gamma = 6
     beta = np.linspace(-gamma, gamma, args.num_epoch+1)
     alpha = 1 - 1 / (1+np.exp(-beta))
-    
-    #update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
-    #ema.eval()
 
     print(f"AutoEncoder Parameters: {sum(p.numel() for p in AutoEncoder.parameters()):,}")
     print(f"Generator Parameters: {sum(p.numel() for p in netG.parameters()):,}")
@@ -210,6 +183,34 @@ def train(rank, gpu, args):
 
     start_epoch = torch.cuda.Event(enable_timing=True)
     end_epoch = torch.cuda.Event(enable_timing=True)
+
+    # Initialize FID metric
+    fid = FrechetInceptionDistance(feature=2048).to(device)
+
+    # Prepare a fixed set of real images for FID calculation
+    if rank == 0:
+        real_images_fid = []
+        num_fid_images = 100 # You can adjust the number of real images for FID
+        count = 0
+        with torch.no_grad():
+            for x, _ in data_loader:
+                real_x0 = x.to(device, non_blocking=True)
+                posterior_real = AutoEncoder.encode(real_x0)
+                real_data_fid_batch = posterior_real.sample().detach()
+                real_data_fid_batch *= args.scale_factor
+                real_data_fid_batch = AutoEncoder.decode(real_data_fid_batch)
+                real_data_fid_batch = (torch.clamp(real_data_fid_batch, -1, 1) + 1) / 2
+                real_images_fid.append(real_data_fid_batch)
+                count += real_x0.size(0)
+                if count >= num_fid_images:
+                    break
+        real_images_fid = torch.cat(real_images_fid[:(num_fid_images + batch_size -1) // batch_size * batch_size])[:num_fid_images] # Ensure consistent size
+        # Accumulate statistics for real images once
+        fid.update(real_images_fid * 255, real=True)
+        del real_images_fid
+        torch.distributed.barrier()
+    else:
+        torch.distributed.barrier()
 
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
@@ -230,12 +231,8 @@ def train(rank, gpu, args):
             with torch.no_grad():
                 posterior_real = AutoEncoder.encode(real_x0)
                 real_data = posterior_real.sample().detach()
-            #print("MIN:{}, MAX:{}".format(real_data.min(), real_data.max()))
             real_data = real_data / args.scale_factor #300.0  # [-1, 1]
-            
-            
-            #assert -1 <= real_data.min() < 0
-            #assert 0 < real_data.max() <= 1
+
             """################# End change: Encoder #################"""
             # sample t
             t = torch.randint(0, args.num_timesteps,
@@ -253,7 +250,7 @@ def train(rank, gpu, args):
             if args.lambda_real > 0:
                 # Apply augmentation to real data (define your augmentation function t)
                 augmented_real_data = augment(real_data.detach())
-                
+
                 augmented_real_x_t, augmented_real_x_tp1 = q_sample_pairs(coeff, augmented_real_data, t)
                 D_augmented_real = netD(augmented_real_x_t, t, augmented_real_x_tp1.detach()).view(-1)
                 errD_real_consistency = F.mse_loss(D_real, D_augmented_real)
@@ -270,7 +267,7 @@ def train(rank, gpu, args):
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
             fake_x0_predict = netG(real_x_tp1.detach(), t, latent_z) # Use real_x_tp1 and t for generating fake samples
-            
+
             fake_x_t, fake_x_tp1 = q_sample_pairs(coeff, fake_x0_predict, t)
 
             output = netD(fake_x_t, t, fake_x_tp1.detach()).view(-1)
@@ -280,7 +277,7 @@ def train(rank, gpu, args):
             if args.lambda_fake > 0:
                 # Apply augmentation to generated fake data (define your augmentation function T_fake)
                 augmented_fake_x0_predict = augment(fake_x0_predict.detach()) # Detach to avoid gradient flow through generator
-                
+
                 augmented_fake_x_t, augmented_fake_x_tp1 = q_sample_pairs(coeff, augmented_fake_x0_predict, t)
                 D_augmented_fake = netD(augmented_fake_x_t, t, augmented_fake_x_tp1.detach()).view(-1)
                 errD_fake_consistency = F.mse_loss(output, D_augmented_fake)
@@ -307,7 +304,7 @@ def train(rank, gpu, args):
             latent_z = torch.randn(batch_size, nz, device=device)
             x_0_predict = netG(x_tp1_gen.detach(), t_gen, latent_z)
             x_pos_predict = sample_posterior(pos_coeff, x_0_predict, x_tp1_gen, t_gen)
-            
+
             output = netD(x_pos_predict, t_gen, x_tp1_gen.detach()).view(-1)
             errG = F.softplus(-output).mean()
 
@@ -320,33 +317,26 @@ def train(rank, gpu, args):
             elif args.rec_loss and not args.sigmoid_learning:
                 rec_loss = F.l1_loss(x_0_predict, real_data)
                 errG = errG + rec_loss
-            
 
             errG.backward()
             optimizerG.step()
 
             end.record()
             torch.cuda.synchronize()
-            #print("\rIteration time: {:.0f} ms".format(start.elapsed_time(end)), end="")
 
             global_step += 1
-            #if iteration % 100 == 0:
             if rank == 0:
                 iter_time = start.elapsed_time(end)
+                log_message = f'\r[#{epoch:05}][#{iteration:04}][{iter_time:04.0f}ms] G Loss[{errG.item():.4f}] D Loss[{errD.item():.4f}]'
                 if args.sigmoid_learning:
-                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] alpha[{:.4f}]'.format(
-                        epoch, iteration, iter_time, errG.item(), errD.item(), alpha[epoch]), end="")
+                    log_message += f' alpha[{alpha[epoch]:.4f}]'
                 elif args.rec_loss:
-                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] rec_loss[{:.4f}]'.format(
-                        epoch, iteration, iter_time, errG.item(), errD.item(), rec_loss.item()), end="")
-                else:   
-                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}]'.format(
-                        epoch, iteration, iter_time, errG.item(), errD.item()), end="")
+                    log_message += f' rec_loss[{rec_loss.item():.4f}]'
+                print(log_message, end="")
 
                 wandb.log({"G_loss_iter": errG.item(), "D_loss_iter": errD.item(), "iter_time": iter_time})
 
         if not args.no_lr_decay:
-
             schedulerG.step()
             schedulerD.step()
 
@@ -363,23 +353,28 @@ def train(rank, gpu, args):
 
             """############## CHANGE HERE: DECODER ##############"""
             fake_sample *= args.scale_factor #300
-            real_data *= args.scale_factor #300
+            # real_data *= args.scale_factor #300 # No need to decode real_data here, already done for FID
             with torch.no_grad():
                 fake_sample = AutoEncoder.decode(fake_sample)
-                real_data = AutoEncoder.decode(real_data)
-            
+
             fake_sample = (torch.clamp(fake_sample, -1, 1) + 1) / 2  # 0-1
-            real_data = (torch.clamp(real_data, -1, 1) + 1) / 2  # 0-1 
-            
+            # real_data = (torch.clamp(real_data, -1, 1) + 1) / 2  # 0-1
+
             """############## END HERE: DECODER ##############"""
 
             torchvision.utils.save_image(fake_sample, os.path.join(
                 exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)))
-            torchvision.utils.save_image(
-                real_data, os.path.join(exp_path, 'real_data.png'))
-            
-            wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])], "real_data": [wandb.Image(real_data[:4])]})
-            
+            # torchvision.utils.save_image(
+            #     real_data, os.path.join(exp_path, 'real_data.png'))
+
+            # Calculate FID
+            with torch.no_grad():
+                fid.update(fake_sample * 255, real=False)
+                current_fid = fid.compute()
+                wandb.log({"FID": current_fid})
+                fid.reset() # Reset FID metric for the next iteration
+
+            wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])]}) #, "real_data": [wandb.Image(real_data[:4])]})
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
@@ -400,250 +395,3 @@ def train(rank, gpu, args):
                 if args.use_ema:
                     optimizerG.swap_parameters_with_ema(
                         store_params_in_ema=True)
-    
-
-# %%
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser('ddgan parameters')
-    parser.add_argument('--seed', type=int, default=1024,
-                        help='seed used for initialization')
-
-    parser.add_argument('--resume', action='store_true', default=False)
-
-    parser.add_argument('--image_size', type=int, default=32,
-                        help='size of image')
-    parser.add_argument('--num_channels', type=int, default=12,
-                        help='channel of wavelet subbands')
-    parser.add_argument('--centered', action='store_false', default=True,
-                        help='-1,1 scale')
-    parser.add_argument('--use_geometric', action='store_true', default=False)
-    parser.add_argument('--beta_min', type=float, default=0.1,
-                        help='beta_min for diffusion')
-    parser.add_argument('--beta_max', type=float, default=20.,
-                        help='beta_max for diffusion')
-
-    parser.add_argument('--patch_size', type=int, default=1,
-                        help='Patchify image into non-overlapped patches')
-    parser.add_argument('--num_channels_dae', type=int, default=128,
-                        help='number of initial channels in denosing model')
-    parser.add_argument('--n_mlp', type=int, default=3,
-                        help='number of mlp layers for z')
-    parser.add_argument('--ch_mult', nargs='+', type=int,
-                        help='channel multiplier')
-    parser.add_argument('--num_res_blocks', type=int, default=2,
-                        help='number of resnet blocks per scale')
-    parser.add_argument('--attn_resolutions', default=(16,), nargs='+', type=int,
-                        help='resolution of applying attention')
-    parser.add_argument('--dropout', type=float, default=0.,
-                        help='drop-out rate')
-    parser.add_argument('--resamp_with_conv', action='store_false', default=True,
-                        help='always up/down sampling with conv')
-    parser.add_argument('--conditional', action='store_false', default=True,
-                        help='noise conditional')
-    parser.add_argument('--fir', action='store_false', default=True,
-                        help='FIR')
-    parser.add_argument('--fir_kernel', default=[1, 3, 3, 1],
-                        help='FIR kernel')
-    parser.add_argument('--skip_rescale', action='store_false', default=True,
-                        help='skip rescale')
-    parser.add_argument('--resblock_type', default='biggan',
-                        help='tyle of resnet block, choice in biggan and ddpm')
-    parser.add_argument('--progressive', type=str, default='none', choices=['none', 'output_skip', 'residual'],
-                        help='progressive type for output')
-    parser.add_argument('--progressive_input', type=str, default='residual', choices=['none', 'input_skip', 'residual'],
-                        help='progressive type for input')
-    parser.add_argument('--progressive_combine', type=str, default='sum', choices=['sum', 'cat'],
-                        help='progressive combine method.')
-
-    parser.add_argument('--embedding_type', type=str, default='positional', choices=['positional', 'fourier'],
-                        help='type of time embedding')
-    parser.add_argument('--fourier_scale', type=float, default=16.,
-                        help='scale of fourier transform')
-    parser.add_argument('--not_use_tanh', action='store_true', default=False)
-
-    # generator and training
-    parser.add_argument(
-        '--exp', default='experiment_cifar_default', help='name of experiment')
-    parser.add_argument('--dataset', default='cifar10', help='name of dataset')
-    parser.add_argument('--datadir', default='./data')
-    parser.add_argument('--nz', type=int, default=100)
-    parser.add_argument('--num_timesteps', type=int, default=4)
-
-    parser.add_argument('--z_emb_dim', type=int, default=256)
-    parser.add_argument('--t_emb_dim', type=int, default=256)
-    parser.add_argument('--batch_size', type=int,
-                        default=128, help='input batch size')
-    parser.add_argument('--num_epoch', type=int, default=1200)
-    parser.add_argument('--ngf', type=int, default=64)
-
-    parser.add_argument('--lr_g', type=float,
-                        default=1.5e-4, help='learning rate g')
-    parser.add_argument('--lr_d', type=float, default=1e-4,
-                        help='learning rate d')
-    parser.add_argument('--beta1', type=float, default=0.5,
-                        help='beta1 for adam')
-    parser.add_argument('--beta2', type=float, default=0.9,
-                        help='beta2 for adam')
-    parser.add_argument('--no_lr_decay', action='store_true', default=False)
-
-    parser.add_argument('--use_ema', action='store_true', default=False,
-                        help='use EMA or not')
-    parser.add_argument('--ema_decay', type=float,
-                        default=0.9999, help='decay rate for EMA')
-
-    parser.add_argument('--r1_gamma', type=float,
-                        default=0.05, help='coef for r1 reg')
-    parser.add_argument('--lazy_reg', type=int, default=None,
-                        help='lazy regulariation.')
-
-    # wavelet GAN
-    parser.add_argument("--current_resolution", type=int, default=256)
-    parser.add_argument("--use_pytorch_wavelet", action="store_true")
-    parser.add_argument("--rec_loss", action="store_true")
-    parser.add_argument("--net_type", default="normal")
-    parser.add_argument("--num_disc_layers", default=6, type=int)
-    parser.add_argument("--no_use_fbn", action="store_true")
-    parser.add_argument("--no_use_freq", action="store_true")
-    parser.add_argument("--no_use_residual", action="store_true")
-
-    parser.add_argument('--save_content', action='store_true', default=False)
-    parser.add_argument('--save_content_every', type=int, default=50,
-                        help='save content for resuming every x epochs')
-    parser.add_argument('--save_ckpt_every', type=int,
-                        default=25, help='save ckpt every x epochs')
-
-    # ddp
-    parser.add_argument('--num_proc_node', type=int, default=1,
-                        help='The number of nodes in multi node env.')
-    parser.add_argument('--num_process_per_node', type=int, default=1,
-                        help='number of gpus')
-    parser.add_argument('--node_rank', type=int, default=0,
-                        help='The index of node.')
-    parser.add_argument('--local_rank', type=int, default=0,
-                        help='rank of process in the node')
-    parser.add_argument('--master_address', type=str, default='127.0.0.1',
-                        help='address for master')
-    parser.add_argument('--master_port', type=str, default='6002',
-                        help='port for master')
-    parser.add_argument('--num_workers', type=int, default=16,
-                        help='num_workers')
-    
-    ##### My parameter #####
-    parser.add_argument('--scale_factor', type=float, default=16.,
-                        help='scale of Encoder output')
-    parser.add_argument(
-        '--AutoEncoder_config', default='./autoencoder/config/autoencoder_kl_f2_16x16x4_Cifar10_big.yaml', help='path of config file for AntoEncoder')
-
-    parser.add_argument(
-        '--AutoEncoder_ckpt', default='./autoencoder/weight/last_big.ckpt', help='path of weight for AntoEncoder')
-    
-    parser.add_argument("--sigmoid_learning", action="store_true")
-    parser.add_argument("--class_conditional", action="store_true", default=False)
-    
-    # bCRのハイパーパラメータを追加
-    parser.add_argument('--lambda_fake', type=float, default=10.0, help='bCR regularization strength for fake images')
-    parser.add_argument('--lambda_real', type=float, default=10.0, help='bCR regularization strength for real images')
-    
-    
-    args = parser.parse_args()
-
-    args.world_size = args.num_proc_node * args.num_process_per_node
-    size = args.num_process_per_node
-
-    wandb.init(
-        project="iddgan-original",
-        name=args.exp,
-        # すべてのパラメータをログに記録
-        config={
-            "seed": args.seed,
-            "image_size": args.image_size,
-            "num_channels": args.num_channels,
-            "centered": args.centered,
-            "use_geometric": args.use_geometric,
-            "beta_min": args.beta_min,
-            "beta_max": args.beta_max,
-            "patch_size": args.patch_size,
-            "num_channels_dae": args.num_channels_dae,
-            "n_mlp": args.n_mlp,
-            "ch_mult": args.ch_mult,
-            "num_res_blocks": args.num_res_blocks,
-            "attn_resolutions": args.attn_resolutions,
-            "dropout": args.dropout,
-            "resamp_with_conv": args.resamp_with_conv,
-            "conditional": args.conditional,
-            "fir": args.fir,
-            "fir_kernel": args.fir_kernel,
-            "skip_rescale": args.skip_rescale,
-            "resblock_type": args.resblock_type,
-            "progressive": args.progressive,
-            "progressive_input": args.progressive_input,
-            "progressive_combine": args.progressive_combine,
-            "embedding_type": args.embedding_type,
-            "fourier_scale": args.fourier_scale,
-            "not_use_tanh": args.not_use_tanh,
-            "exp": args.exp,
-            "dataset": args.dataset,
-            "datadir": args.datadir,
-            "nz": args.nz,
-            "num_timesteps": args.num_timesteps,
-            "z_emb_dim": args.z_emb_dim,
-            "t_emb_dim": args.t_emb_dim,
-            "batch_size": args.batch_size,
-            "num_epoch": args.num_epoch,
-            "ngf": args.ngf,
-            "lr_g": args.lr_g,
-            "lr_d": args.lr_d,
-            "beta1": args.beta1,
-            "beta2": args.beta2,
-            "no_lr_decay": args.no_lr_decay,
-            "use_ema": args.use_ema,
-            "ema_decay": args.ema_decay,
-            "r1_gamma": args.r1_gamma,
-            "lazy_reg": args.lazy_reg,
-            "current_resolution": args.current_resolution,
-            "use_pytorch_wavelet": args.use_pytorch_wavelet,
-            "rec_loss": args.rec_loss,
-            "net_type": args.net_type,
-            "num_disc_layers": args.num_disc_layers,
-            "no_use_fbn": args.no_use_fbn,
-            "no_use_freq": args.no_use_freq,
-            "no_use_residual": args.no_use_residual,
-            "save_content": args.save_content,
-            "save_content_every": args.save_content_every,
-            "save_ckpt_every": args.save_ckpt_every,
-            "num_proc_node": args.num_proc_node,
-            "num_process_per_node": args.num_process_per_node,
-            "node_rank": args.node_rank,
-            "local_rank": args.local_rank,
-            "master_address": args.master_address,
-            "master_port": args.master_port,
-            "num_workers": args.num_workers,
-            "scale_factor": args.scale_factor,
-            "AutoEncoder_config": args.AutoEncoder_config,
-            "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
-            "sigmoid_learning": args.sigmoid_learning,
-            "class_conditional": args.class_conditional,
-        }
-    )
-
-    if size > 1:
-        processes = []
-        for rank in range(size):
-            args.local_rank = rank
-            global_rank = rank + args.node_rank * args.num_process_per_node
-            global_size = args.num_proc_node * args.num_process_per_node
-            args.global_rank = global_rank
-            print('Node rank %d, local proc %d, global proc %d' %
-                  (args.node_rank, rank, global_rank))
-            p = Process(target=init_processes, args=(
-                global_rank, global_size, train, args))
-            p.start()
-            processes.append(p)
-
-        for p in processes:
-            
-            p.join()
-    else:
-        print('starting in debug mode')
-        init_processes(0, size, train, args)
-        wandb.finish()
