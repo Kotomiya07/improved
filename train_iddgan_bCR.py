@@ -234,7 +234,7 @@ def train(rank, gpu, args):
                     break
         real_images_fid = torch.cat(real_images_fid[:(num_fid_images + batch_size -1) // batch_size * batch_size])[:num_fid_images] # Ensure consistent size
         # Accumulate statistics for real images once
-        fid.update((real_images_fid * 255).to(torch.unin8), real=True)
+        fid.update((real_images_fid * 255).to(torch.uint8), real=True)
         del real_images_fid
         torch.distributed.barrier()
     else:
@@ -408,7 +408,7 @@ def train(rank, gpu, args):
                 real_data, os.path.join(exp_path, 'real_data.png'))
             # Calculate FID
             with torch.no_grad():
-                fid.update((fake_sample * 255).to(torch.unin8), real=False)
+                fid.update((fake_sample * 255).to(torch.uint8), real=False)
                 current_fid = fid.compute()
                 wandb.log({"FID": current_fid})
                 fid.reset() # Reset FID metric for the next iteration
