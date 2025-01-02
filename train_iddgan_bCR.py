@@ -216,29 +216,29 @@ def train(rank, gpu, args):
     fid = FrechetInceptionDistance(feature=2048).to(device)
 
     # Prepare a fixed set of real images for FID calculation
-    if rank == 0:
-        real_images_fid = []
-        num_fid_images = 100 # You can adjust the number of real images for FID
-        count = 0
-        with torch.no_grad():
-            for x, _ in data_loader:
-                real_x0 = x.to(device, non_blocking=True)
-                posterior_real = AutoEncoder.encode(real_x0)
-                real_data_fid_batch = posterior_real.sample().detach()
-                real_data_fid_batch *= args.scale_factor
-                real_data_fid_batch = AutoEncoder.decode(real_data_fid_batch)
-                real_data_fid_batch = (torch.clamp(real_data_fid_batch, -1, 1) + 1) / 2
-                real_images_fid.append(real_data_fid_batch)
-                count += real_x0.size(0)
-                if count >= num_fid_images:
-                    break
-        real_images_fid = torch.cat(real_images_fid[:(num_fid_images + batch_size -1) // batch_size * batch_size])[:num_fid_images] # Ensure consistent size
-        # Accumulate statistics for real images once
-        fid.update((real_images_fid * 255).to(torch.uint8), real=True)
-        del real_images_fid
-        torch.distributed.barrier()
-    else:
-        torch.distributed.barrier()
+    # if rank == 0:
+    #     real_images_fid = []
+    #     num_fid_images = 100 # You can adjust the number of real images for FID
+    #     count = 0
+    #     with torch.no_grad():
+    #         for x, _ in data_loader:
+    #             real_x0 = x.to(device, non_blocking=True)
+    #             posterior_real = AutoEncoder.encode(real_x0)
+    #             real_data_fid_batch = posterior_real.sample().detach()
+    #             real_data_fid_batch *= args.scale_factor
+    #             real_data_fid_batch = AutoEncoder.decode(real_data_fid_batch)
+    #             real_data_fid_batch = (torch.clamp(real_data_fid_batch, -1, 1) + 1) / 2
+    #             real_images_fid.append(real_data_fid_batch)
+    #             count += real_x0.size(0)
+    #             if count >= num_fid_images:
+    #                 break
+    #     real_images_fid = torch.cat(real_images_fid[:(num_fid_images + batch_size -1) // batch_size * batch_size])[:num_fid_images] # Ensure consistent size
+    #     # Accumulate statistics for real images once
+    #     fid.update((real_images_fid * 255).to(torch.uint8), real=True)
+    #     del real_images_fid
+    #     torch.distributed.barrier()
+    # else:
+    #     torch.distributed.barrier()
 
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
@@ -408,6 +408,7 @@ def train(rank, gpu, args):
                 real_data, os.path.join(exp_path, 'real_data.png'))
             # Calculate FID
             with torch.no_grad():
+                fid.update((real_data * 255).to(torch.uint8), real=True)
                 fid.update((fake_sample * 255).to(torch.uint8), real=False)
                 current_fid = fid.compute()
                 wandb.log({"FID": current_fid})
