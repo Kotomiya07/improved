@@ -22,6 +22,8 @@ python3 test_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-s2-ski
 # H100 batch 100 Inference time: 96.50+/-2.30ms
 # A100 batch 1 Inference time: 90.32+/-8.63ms
 # A100 batch 100 Inference time: 144.86+/-17.42ms
+# RTX4090 batch 1 Inference time: 25.08+/-2.44ms 
+# RTX4090 batch 100 Inference time: 63.38+/-0.78ms
 # python3 test.py --dataset cifar10 --exp kl-f2-3 --epoch_id 1825 --num_channels 4 \
 # --num_channels_dae 128 --num_timesteps 4 --num_res_blocks 2 --nz 50 --z_emb_dim 256 \
 # --n_mlp 4 --ch_mult 1 2 2 --image_size 32 --current_resolution 16 --attn_resolutions 32 \
@@ -35,6 +37,9 @@ python3 test_dit_no_ddp.py --dataset cifar10 --exp cifar10-ori-dit-no-ddp-s2-ski
 # A100 batch 1 Inference time: 86.44+/-11.92ms
 # A100 batch 25 Inference time: 414.55+/-2.83ms
 # A100 batch 100 Inference time: 1452.89+/-3.14ms
+# RTX4090 batch 1 Inference time: 32.34+/-2.69ms 
+# RTX4090 batch 25 Inference time: 520.90+/-1.12ms 
+# RTX4090 batch 100 
 # python3 test.py --dataset celeba_256 --image_size 256 --exp vq-f4-256 --epoch_id 500 --num_channels 3 \
 # --num_channels_dae 128 --num_timesteps 2 --num_res_blocks 2 --nz 100 --z_emb_dim 256 \
 # --n_mlp 3 --ch_mult 1 2 2 2 --image_size 256 --current_resolution 64 --attn_resolutions 16 \

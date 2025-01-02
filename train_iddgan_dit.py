@@ -10,7 +10,7 @@ import torch.optim as optim
 import torchvision
 from torchvision import transforms
 from datasets_prep.dataset import create_dataset
-from diffusion import sample_from_model, sample_posterior, \
+from diffusion import sample_from_model_dit, sample_posterior, \
     q_sample_pairs, get_time_schedule, \
     Posterior_Coefficients, Diffusion_Coefficients
 #from DWT_IDWT.DWT_IDWT_layer import DWT_2D, IDWT_2D
@@ -26,6 +26,7 @@ from copy import deepcopy
 from collections import OrderedDict
 import random
 from models_fix import DiT_models
+from diffusions import create_diffusion
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -294,6 +295,8 @@ def train(rank, gpu, args):
     start_epoch = torch.cuda.Event(enable_timing=True)
     end_epoch = torch.cuda.Event(enable_timing=True)
 
+    #diffusion = create_diffusion(timestep_respacing="", diffusion_steps=args.num_timesteps)
+
 
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
@@ -314,6 +317,8 @@ def train(rank, gpu, args):
 
             # sample from p(x_0)
             x0 = x.to(device, non_blocking=True)
+
+            y = y.to(device, non_blocking=True)
 
             """################# Change here: Encoder #################"""
             with torch.no_grad():
@@ -349,7 +354,7 @@ def train(rank, gpu, args):
 
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
+            x_0_predict = netG(x_tp1.detach(), t, y)
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
@@ -381,10 +386,13 @@ def train(rank, gpu, args):
             x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
 
             latent_z = torch.randn(batch_size, nz, device=device)
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
+            x_0_predict = netG(x_tp1.detach(), t, y)
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
+            model_kwargs = dict(y=y)
+            #loss_dict = diffusion.training_losses(netG, x_0_predict, t, model_kwargs)
+            #errG = loss_dict["loss"].mean()
             errG = F.softplus(-output).mean()
             #errG = loss(output, "gen")
 
@@ -435,7 +443,7 @@ def train(rank, gpu, args):
             wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "epoch_time": epoch_time / 1000})
             ########################################
             x_t_1 = torch.randn_like(posterior.sample())
-            fake_sample = sample_from_model(
+            fake_sample = sample_from_model_dit(
                 pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 
             """############## CHANGE HERE: DECODER ##############"""

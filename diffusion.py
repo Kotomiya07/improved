@@ -172,3 +172,18 @@ def sample_from_model(coefficients, generator, n_time, x_init, T, opt, class_emb
             x = x_new.detach()
 
     return x
+
+def sample_from_model_dit(coefficients, generator, n_time, x_init, T, opt, class_emb=None):
+    x = x_init
+    with torch.no_grad():
+        label = torch.randint(0, 10, (x.size(0),), device=x.device)
+        for i in reversed(range(n_time)):
+            t = torch.full((x.size(0),), i, device=x.device)
+
+            t_time = t
+            
+            x_0 = generator(x, t_time, label)
+            x_new = sample_posterior(coefficients, x_0, x, t)
+            x = x_new.detach()
+
+    return x

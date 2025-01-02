@@ -204,7 +204,7 @@ class DiT(nn.Module):
         num_heads=16,
         mlp_ratio=4.0,
         class_dropout_prob=0.1,
-        num_classes=1000,
+        num_classes=10,
         learn_sigma=False,
     ):
         super().__init__()
@@ -216,7 +216,7 @@ class DiT(nn.Module):
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        #self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+        self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         #self.z_embedder = ZEmbedder(target_shape=(input_size, input_size, in_channels))
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
@@ -247,7 +247,7 @@ class DiT(nn.Module):
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
         # Initialize label embedding table:
-        #nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+        nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
 
         # Initialize z embedding layer:
         #nn.init.normal_(self.z_embedder.fc.weight, 0)
@@ -302,9 +302,9 @@ class DiT(nn.Module):
         """
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
-        #y = self.z_embedder(y)                   # (N, D)
+        y = self.y_embedder(y, self.training)    # (N, D)
         #y = self.x_embedder(y) + self.pos_embed # (N, T, D)    # 変更
-        c = t                                # (N, D)    # 変更
+        c = t + y                                # (N, D)    # 変更
         x0 = x.detach()
         for block in self.blocks:
             x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c)       # (N, T, D)
