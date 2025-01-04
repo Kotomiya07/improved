@@ -407,12 +407,12 @@ def train(rank, gpu, args):
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
             # Calculate FID
-            with torch.no_grad():
-                fid.update((real_data * 255).to(torch.uint8), real=True)
-                fid.update((fake_sample * 255).to(torch.uint8), real=False)
-                current_fid = fid.compute()
-                wandb.log({"FID": current_fid})
-                fid.reset() # Reset FID metric for the next iteration
+            #with torch.no_grad():
+            #    fid.update((real_data * 255).to(torch.uint8), real=True)
+            #    fid.update((fake_sample * 255).to(torch.uint8), real=False)
+            #    current_fid = fid.compute()
+            #    wandb.log({"FID": current_fid})
+            #    fid.reset() # Reset FID metric for the next iteration
 
             wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])], "real_data": [wandb.Image(real_data[:4])]})
             
