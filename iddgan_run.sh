@@ -52,7 +52,7 @@ if [[ $MODE == train ]]; then
 			--sigmoid_learning
 	
 	elif [[ $DATASET == cifar10-bCR ]]; then
-            python3 train_iddgan_bCR.py --dataset cifar10 --exp cifar10-bCR-lambda2 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+            python3 train_iddgan_bCR.py --dataset cifar10 --exp cifar10-bCR-lambda1.5 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 2000 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
 			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
@@ -63,8 +63,8 @@ if [[ $MODE == train ]]; then
 			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
 			--rec_loss \
 			--sigmoid_learning \
-			--lambda_fake 2.0 \
-			--lambda_real 2.0
+			--lambda_fake 1.5 \
+			--lambda_real 1.5
 
 	elif [[ $DATASET == cifar10-vq ]]; then
 		python3 train_iddgan_celeba.py --dataset cifar10 --exp cifar10-vq-sf6 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
