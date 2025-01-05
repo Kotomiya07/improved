@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
-# from datasets_prep.dataset import create_dataset  # Replace this
+from datasets_prep.dataset import create_dataset
 from diffusion import sample_from_model, sample_posterior, \
     q_sample_pairs, get_time_schedule, \
     Posterior_Coefficients, Diffusion_Coefficients
@@ -25,13 +25,6 @@ from copy import deepcopy
 from collections import OrderedDict
 from PIL import Image as PILImage
 from torchmetrics.image.fid import FrechetInceptionDistance
-
-# DALI and Kornia imports
-import nvidia.dali.ops as ops
-import nvidia.dali.types as types
-from nvidia.dali.pipeline import Pipeline
-from nvidia.dali.plugin.pytorch import DALIClassificationIterator, LastBatchPolicy
-import kornia.augmentation as K
 
 def load_model_from_config(config_path, ckpt):
     print(f"Loading model from {ckpt}")
@@ -60,60 +53,6 @@ def grad_penalty_call(args, D_real, x_t):
     grad_penalty = args.r1_gamma / 2 * grad_penalty
     grad_penalty.backward()
 
-# DALI Pipeline definition
-class HybridTrainPipe(Pipeline):
-    def __init__(self, data_dir, image_size, batch_size, num_threads, device_id, seed, world_size, local_rank):
-        super(HybridTrainPipe, self).__init__(batch_size, num_threads, device_id, seed=seed + device_id)
-        self.input = ops.readers.File(
-            file_root=data_dir,
-            shard_id=local_rank,
-            num_shards=world_size,
-            random_shuffle=True,
-            seed=seed
-        )
-        self.decode = ops.decoders.Image(type=types.DALIImageType.RGB)
-        self.res = ops.Resize(
-            type=types.ResizeType.CUBIC,
-            interp_type=types.DALIInterpType.LINEAR
-        )
-        self.cast = ops.Cast(dtype=types.DALIDataType.FLOAT16)
-        self.uniform = ops.random.Uniform(range=(0.0, 1.0))
-        self.crop = ops.RandomCrop(device="gpu", output_size=(image_size, image_size))
-        self.rng_rotate = ops.random.Uniform(range=(-30, 30))
-
-        # Kornia augmentations within DALI
-        self.kornia_rotate = ops.KorniaAugmentation(K.RandomRotation(([-30.0, 30.0])))
-        self.kornia_rcrop = ops.KorniaAugmentation(K.RandomResizedCrop((image_size, image_size), scale=(0.8, 1.2)))
-
-        self.size = image_size
-        self.mean = [0.5 * 255]
-        self.std = [0.5 * 255]
-
-    def define_graph(self):
-        jpegs, _ = self.input(name="Reader")
-        images = self.decode(jpegs)
-        images = self.crop(images)
-        images = self.res(images, resize_x=self.size, resize_y=self.size)
-        images = self.cast(images)
-        # Apply augmentations
-        images_rcrop = self.kornia_rcrop(images)
-        rotated_images = self.kornia_rotate(images)
-
-        # Randomly choose between original, rotated, and resized-cropped images
-        rng = self.uniform()
-        out = ops.ConditionalExpression(
-            rng < 0.33,
-            images,
-            ops.ConditionalExpression(
-                rng < 0.66,
-                rotated_images,
-                images_rcrop
-            )
-        )
-
-        output = (out / self.std[0]) - (self.mean[0] / self.std[0])
-        return output
-
 # %%
 def train(rank, gpu, args):
     from EMA import EMA
@@ -129,25 +68,17 @@ def train(rank, gpu, args):
 
     nz = args.nz  # latent dimension
 
-    # DALI data pipeline
-    train_pipe = HybridTrainPipe(
-        data_dir=args.datadir,
-        image_size=args.image_size,
-        batch_size=batch_size,
-        num_threads=args.num_workers,
-        device_id=gpu,
-        seed=args.seed,
-        world_size=args.world_size,
-        local_rank=rank
-    )
-    train_pipe.build()
-    dali_iter = DALIClassificationIterator(
-        train_pipe,
-        size=len(train_pipe) // args.world_size,
-        fill_last_batch=False,
-        last_batch_policy=LastBatchPolicy.DROP
-    )
-
+    dataset = create_dataset(args)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset,
+                                                                    num_replicas=args.world_size,
+                                                                    rank=rank)
+    data_loader = torch.utils.data.DataLoader(dataset,
+                                              batch_size=batch_size,
+                                              shuffle=False,
+                                              num_workers=args.num_workers,
+                                              pin_memory=True,
+                                              sampler=train_sampler,
+                                              drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
     G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
@@ -176,6 +107,9 @@ def train(rank, gpu, args):
 
     if args.use_ema:
         optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
+    
+    #ema = deepcopy(netG).to(device)  # Create an EMA of the model for use after training
+    #requires_grad(ema, False)
 
     schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizerG, args.num_epoch, eta_min=1e-5)
@@ -187,8 +121,21 @@ def train(rank, gpu, args):
         netG, device_ids=[gpu])
     netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
+    """############### DELETE TO AVOID ERROR ###############"""
+    # Wavelet Pooling
+    #if not args.use_pytorch_wavelet:
+    #    dwt = DWT_2D("haar")
+    #    iwt = IDWT_2D("haar")
+    #else:
+    #    dwt = DWTForward(J=1, mode='zero', wave='haar').cuda()
+    #    iwt = DWTInverse(mode='zero', wave='haar').cuda()
+        
+    
+    #load encoder and decoder
     config_path = args.AutoEncoder_config
     ckpt_path = args.AutoEncoder_ckpt
+    
+    #if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
 
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
@@ -199,7 +146,11 @@ def train(rank, gpu, args):
     AutoEncoder.load_state_dict(checkpoint['state_dict'])
     AutoEncoder.eval()
     AutoEncoder.to(device)
-
+    
+    #else:
+    #    AutoEncoder = load_model_from_config(config_path, ckpt_path)
+    """############### END DELETING ###############"""
+    
     num_levels = int(np.log2(args.ori_image_size // args.current_resolution))
 
     exp = args.exp
@@ -241,10 +192,19 @@ def train(rank, gpu, args):
     gamma = 6
     beta = np.linspace(-gamma, gamma, args.num_epoch+1)
     alpha = 1 - 1 / (1+np.exp(-beta))
+    
+    #update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
+    #ema.eval()
 
     print(f"AutoEncoder Parameters: {sum(p.numel() for p in AutoEncoder.parameters()):,}")
     print(f"Generator Parameters: {sum(p.numel() for p in netG.parameters()):,}")
     print(f"Discriminator Parameters: {sum(p.numel() for p in netD.parameters()):,}")
+
+    list_augments = [
+        torchvision.transforms.RandomCrop(args.image_size, padding=4, padding_mode="reflect"), # ランダムな位置で切り取り
+        torchvision.transforms.RandomResizedCrop(size=args.image_size, scale=(0.8, 1.2)),    # ズームインとズームアウト
+        torchvision.transforms.RandomRotation(degrees=30),                                   # 左右30度までのローテート
+    ]
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
@@ -255,12 +215,36 @@ def train(rank, gpu, args):
     # Initialize FID metric
     fid = FrechetInceptionDistance(feature=2048).to(device)
 
-    for epoch in range(init_epoch, args.num_epoch + 1):
-        start_epoch.record()
-        for iteration, data in enumerate(dali_iter):
-            start.record()
-            real_x0 = data[0]['data'].to(device) # Access data from DALI iterator
+    # Prepare a fixed set of real images for FID calculation
+    # if rank == 0:
+    #     real_images_fid = []
+    #     num_fid_images = 100 # You can adjust the number of real images for FID
+    #     count = 0
+    #     with torch.no_grad():
+    #         for x, _ in data_loader:
+    #             real_x0 = x.to(device, non_blocking=True)
+    #             posterior_real = AutoEncoder.encode(real_x0)
+    #             real_data_fid_batch = posterior_real.sample().detach()
+    #             real_data_fid_batch *= args.scale_factor
+    #             real_data_fid_batch = AutoEncoder.decode(real_data_fid_batch)
+    #             real_data_fid_batch = (torch.clamp(real_data_fid_batch, -1, 1) + 1) / 2
+    #             real_images_fid.append(real_data_fid_batch)
+    #             count += real_x0.size(0)
+    #             if count >= num_fid_images:
+    #                 break
+    #     real_images_fid = torch.cat(real_images_fid[:(num_fid_images + batch_size -1) // batch_size * batch_size])[:num_fid_images] # Ensure consistent size
+    #     # Accumulate statistics for real images once
+    #     fid.update((real_images_fid * 255).to(torch.uint8), real=True)
+    #     del real_images_fid
+    #     torch.distributed.barrier()
+    # else:
+    #     torch.distributed.barrier()
 
+    for epoch in range(init_epoch, args.num_epoch + 1):
+        train_sampler.set_epoch(epoch)
+        start_epoch.record()
+        for iteration, (x, y) in enumerate(data_loader):
+            start.record()
             for p in netD.parameters():
                 p.requires_grad = True
             netD.zero_grad()
@@ -268,12 +252,19 @@ def train(rank, gpu, args):
             for p in netG.parameters():
                 p.requires_grad = False
 
+            # sample from p(x_0)
+            real_x0 = x.to(device, non_blocking=True)
+
             """################# Change here: Encoder #################"""
             with torch.no_grad():
                 posterior_real = AutoEncoder.encode(real_x0)
                 real_data = posterior_real.sample().detach()
+            #print("MIN:{}, MAX:{}".format(real_data.min(), real_data.max()))
             real_data = real_data / args.scale_factor #300.0  # [-1, 1]
-
+            
+            
+            #assert -1 <= real_data.min() < 0
+            #assert 0 < real_data.max() <= 1
             """################# End change: Encoder #################"""
             # sample t
             t = torch.randint(0, args.num_timesteps,
@@ -287,11 +278,11 @@ def train(rank, gpu, args):
             errD_real = F.softplus(-D_real).mean()
 
             # Apply consistency regularization for real data
+            augment = torchvision.transforms.RandomChoice(list_augments)
             if args.lambda_real > 0:
-                # Apply augmentation using Kornia directly on GPU
-                augmented_real_data = K.RandomRotation(degrees=30.0, p=1.0)(real_data.detach())
-                augmented_real_data = K.RandomResizedCrop(size=(args.current_resolution, args.current_resolution), scale=(0.8, 1.2), p=1.0)(augmented_real_data)
-
+                # Apply augmentation to real data (define your augmentation function t)
+                augmented_real_data = augment(real_data.detach())
+                
                 augmented_real_x_t, augmented_real_x_tp1 = q_sample_pairs(coeff, augmented_real_data, t)
                 D_augmented_real = netD(augmented_real_x_t, t, augmented_real_x_tp1.detach()).view(-1)
                 errD_real_consistency = F.mse_loss(D_real, D_augmented_real)
@@ -308,7 +299,7 @@ def train(rank, gpu, args):
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
             fake_x0_predict = netG(real_x_tp1.detach(), t, latent_z) # Use real_x_tp1 and t for generating fake samples
-
+            
             fake_x_t, fake_x_tp1 = q_sample_pairs(coeff, fake_x0_predict, t)
 
             output = netD(fake_x_t, t, fake_x_tp1.detach()).view(-1)
@@ -316,10 +307,9 @@ def train(rank, gpu, args):
 
             # Apply consistency regularization for fake data (bCR)
             if args.lambda_fake > 0:
-                # Apply augmentation using Kornia directly on GPU
-                augmented_fake_x0_predict = K.RandomRotation(degrees=30.0, p=1.0)(fake_x0_predict.detach())
-                augmented_fake_x0_predict = K.RandomResizedCrop(size=(args.current_resolution, args.current_resolution), scale=(0.8, 1.2), p=1.0)(augmented_fake_x0_predict)
-
+                # Apply augmentation to generated fake data (define your augmentation function T_fake)
+                augmented_fake_x0_predict = augment(fake_x0_predict.detach()) # Detach to avoid gradient flow through generator
+                
                 augmented_fake_x_t, augmented_fake_x_tp1 = q_sample_pairs(coeff, augmented_fake_x0_predict, t)
                 D_augmented_fake = netD(augmented_fake_x_t, t, augmented_fake_x_tp1.detach()).view(-1)
                 errD_fake_consistency = F.mse_loss(output, D_augmented_fake)
@@ -346,7 +336,7 @@ def train(rank, gpu, args):
             latent_z = torch.randn(batch_size, nz, device=device)
             x_0_predict = netG(x_tp1_gen.detach(), t_gen, latent_z)
             x_pos_predict = sample_posterior(pos_coeff, x_0_predict, x_tp1_gen, t_gen)
-
+            
             output = netD(x_pos_predict, t_gen, x_tp1_gen.detach()).view(-1)
             errG = F.softplus(-output).mean()
 
@@ -359,14 +349,17 @@ def train(rank, gpu, args):
             elif args.rec_loss and not args.sigmoid_learning:
                 rec_loss = F.l1_loss(x_0_predict, real_data)
                 errG = errG + rec_loss
+            
 
             errG.backward()
             optimizerG.step()
 
             end.record()
             torch.cuda.synchronize()
+            #print("\rIteration time: {:.0f} ms".format(start.elapsed_time(end)), end="")
 
             global_step += 1
+            #if iteration % 100 == 0:
             if rank == 0:
                 iter_time = start.elapsed_time(end)
                 if args.sigmoid_learning:
@@ -375,15 +368,14 @@ def train(rank, gpu, args):
                 elif args.rec_loss:
                     print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] rec_loss[{:.4f}]'.format(
                         epoch, iteration, iter_time, errG.item(), errD.item(), rec_loss.item()), end="")
-                else:
+                else:   
                     print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}]'.format(
                         epoch, iteration, iter_time, errG.item(), errD.item()), end="")
 
                 wandb.log({"G_loss_iter": errG.item(), "D_loss_iter": errD.item(), "iter_time": iter_time})
 
-        dali_iter.reset() # Reset DALI iterator for the next epoch
-
         if not args.no_lr_decay:
+
             schedulerG.step()
             schedulerD.step()
 
@@ -404,18 +396,26 @@ def train(rank, gpu, args):
             with torch.no_grad():
                 fake_sample = AutoEncoder.decode(fake_sample)
                 real_data = AutoEncoder.decode(real_data)
-
+            
             fake_sample = (torch.clamp(fake_sample, -1, 1) + 1) / 2  # 0-1
-            real_data = (torch.clamp(real_data, -1, 1) + 1) / 2  # 0-1
-
+            real_data = (torch.clamp(real_data, -1, 1) + 1) / 2  # 0-1 
+            
             """############## END HERE: DECODER ##############"""
 
             torchvision.utils.save_image(fake_sample, os.path.join(
                 exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)))
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
+            # Calculate FID
+            #with torch.no_grad():
+            #    fid.update((real_data * 255).to(torch.uint8), real=True)
+            #    fid.update((fake_sample * 255).to(torch.uint8), real=False)
+            #    current_fid = fid.compute()
+            #    wandb.log({"FID": current_fid})
+            #    fid.reset() # Reset FID metric for the next iteration
 
             wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])], "real_data": [wandb.Image(real_data[:4])]})
+            
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
