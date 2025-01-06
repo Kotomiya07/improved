@@ -296,7 +296,7 @@ def train(rank, gpu, args):
 
             loss_d = loss_real + loss_fake.mean() 
 
-            loss_g = F.binary_cross_entropy_with_logits(output, y_real, reduction='none')
+            loss_g = F.binary_cross_entropy_with_logits(output, y_real, reduction='none').mean()
 
             # reconstructior loss
             if args.sigmoid_learning and args.rec_loss:
