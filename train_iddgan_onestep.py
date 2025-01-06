@@ -318,6 +318,9 @@ def train(rank, gpu, args):
             # Update D
             loss_pack.backward() # once backward for grad scaling
 
+            torch.nn.utils.clip_grad_norm_(netD.parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(netG.parameters(), 0.5)
+
             optimizerD.step()
             optimizerG.step()
 
