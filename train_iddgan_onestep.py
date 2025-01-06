@@ -316,9 +316,6 @@ def train(rank, gpu, args):
             GradientScaler.factor = gmm
 
             # Update D
-            optimizerD.zero_grad()
-            optimizerG.zero_grad()
-
             loss_pack.backward() # once backward for grad scaling
 
             optimizerD.step()
