@@ -279,9 +279,12 @@ def train(rank, gpu, args):
             x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
             x_t.requires_grad = True
 
+            y_real = torch.ones(real_data.size(0), device=device)
+            y_fake = torch.zeros(real_data.size(0), device=device)
+
             # train with real
             D_real = netD(x_t, t, x_tp1.detach()).view(-1)
-            loss_real = F.softplus(-D_real).mean()
+            loss_real = F.binary_cross_entropy_with_logits(D_real, y_real)
 
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
@@ -289,11 +292,11 @@ def train(rank, gpu, args):
             x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            loss_fake = F.softplus(output).mean()
+            loss_fake = F.binary_cross_entropy_with_logits(output, y_fake, reduction='none')
 
-            loss_d = loss_real + loss_fake
+            loss_d = loss_real + loss_fake.mean() 
 
-            loss_g = F.softplus(-output).mean()
+            loss_g = F.binary_cross_entropy_with_logits(output, y_real, reduction='none')
 
             # reconstructior loss
             if args.sigmoid_learning and args.rec_loss:
