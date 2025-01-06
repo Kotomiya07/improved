@@ -286,7 +286,8 @@ def train(rank, gpu, args):
                 augmented_real_x_t, augmented_real_x_tp1 = q_sample_pairs(coeff, augmented_real_data, t)
                 D_augmented_real = netD(augmented_real_x_t, t, augmented_real_x_tp1.detach()).view(-1)
                 errD_real_consistency = F.mse_loss(D_real, D_augmented_real)
-                errD_real = errD_real + args.lambda_real * errD_real_consistency
+                errD_real_bCR = args.lambda_real * errD_real_consistency
+                errD_real = errD_real + errD_real_bCR
 
             errD_real.backward(retain_graph=True)
 
@@ -313,7 +314,8 @@ def train(rank, gpu, args):
                 augmented_fake_x_t, augmented_fake_x_tp1 = q_sample_pairs(coeff, augmented_fake_x0_predict, t)
                 D_augmented_fake = netD(augmented_fake_x_t, t, augmented_fake_x_tp1.detach()).view(-1)
                 errD_fake_consistency = F.mse_loss(output, D_augmented_fake)
-                errD_fake = errD_fake + args.lambda_fake * errD_fake_consistency
+                errD_fake_bCR = args.lambda_fake * errD_fake_consistency
+                errD_fake = errD_fake + errD_fake_bCR
 
             errD_fake.backward()
 
@@ -372,7 +374,7 @@ def train(rank, gpu, args):
                     print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}]'.format(
                         epoch, iteration, iter_time, errG.item(), errD.item()), end="")
 
-                wandb.log({"G_loss_iter": errG.item(), "D_loss_iter": errD.item(), "iter_time": iter_time})
+                wandb.log({"G_loss_iter": errG.item(), "D_loss_iter": errD.item(), "iter_time": iter_time, "D_real_iter": (errD_real + errD_real_bCR).item(), "D_fake_iter": (errD_fake + errD_fake_bCR).item(), "real_bCR_iter": errD_real_bCR.item(), "fake_bCR_iter": errD_fake_bCR.item()})
 
         if not args.no_lr_decay:
 
