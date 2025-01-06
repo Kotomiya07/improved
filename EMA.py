@@ -91,3 +91,6 @@ class EMA(Optimizer):
                     self.optimizer.state[p]['ema'] = tmp
                 else:
                     p.data = ema.detach()
+    
+    def zero_grad(self):
+        self.optimizer.zero_grad()
