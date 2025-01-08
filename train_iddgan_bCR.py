@@ -26,6 +26,9 @@ from collections import OrderedDict
 from PIL import Image as PILImage
 from torchmetrics.image.fid import FrechetInceptionDistance
 
+#torch.backends.cudnn.benchmark = True
+#torch.backends.cuda.matmul.allow_tf32 = True
+
 def load_model_from_config(config_path, ckpt):
     print(f"Loading model from {ckpt}")
     config = OmegaConf.load(config_path)
