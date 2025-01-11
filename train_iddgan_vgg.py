@@ -275,18 +275,18 @@ def train(rank, gpu, args):
             """################# Change here: Encoder #################"""
             with torch.no_grad():
                 posterior = AutoEncoder.encode(x0)
-                real_data = posterior.sample().detach()
+                real_data_latent = posterior.sample().detach()
             #print("MIN:{}, MAX:{}".format(real_data.min(), real_data.max()))
-            real_data = real_data / args.scale_factor #300.0  # [-1, 1]
+            real_data_latent = real_data_latent / args.scale_factor #300.0  # [-1, 1]
 
             #assert -1 <= real_data.min() < 0
             #assert 0 < real_data.max() <= 1
             """################# End change: Encoder #################"""
             # sample t
             t = torch.randint(0, args.num_timesteps,
-                              (real_data.size(0),), device=device)
+                              (real_data_latent.size(0),), device=device)
 
-            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
+            x_t, x_tp1 = q_sample_pairs(coeff, real_data_latent, t)
             x_t.requires_grad = True
 
             # train with real
@@ -303,8 +303,8 @@ def train(rank, gpu, args):
 
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
+            x_0_predict_latent = netG(x_tp1.detach(), t, latent_z)
+            x_pos_sample = sample_posterior(pos_coeff, x_0_predict_latent, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             errD_fake = F.softplus(output).mean()
@@ -324,12 +324,18 @@ def train(rank, gpu, args):
             netG.zero_grad()
 
             t = torch.randint(0, args.num_timesteps,
-                              (real_data.size(0),), device=device)
-            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
+                              (real_data_latent.size(0),), device=device)
+            x_t, x_tp1 = q_sample_pairs(coeff, real_data_latent, t)
 
             latent_z = torch.randn(batch_size, nz, device=device)
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
+            x_0_predict_latent = netG(x_tp1.detach(), t, latent_z)
+
+            # Decode for VGG Loss and Reconstruction Loss
+            with torch.no_grad():
+                fake_sample_vgg_input = AutoEncoder.decode(x_0_predict_latent * args.scale_factor)
+                real_data_vgg_input = AutoEncoder.decode(real_data_latent * args.scale_factor)
+
+            x_pos_sample = sample_posterior(pos_coeff, x_0_predict_latent, x_tp1, t)
 
             output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
             errG = F.softplus(-output).mean()
@@ -337,27 +343,24 @@ def train(rank, gpu, args):
             # reconstructior loss
             if args.sigmoid_learning and args.rec_loss:
                 ######alpha
-                rec_loss = F.l1_loss(x_0_predict, real_data)
+                rec_loss = F.l1_loss(x_0_predict_latent, real_data_latent)
                 errG = errG + alpha[epoch]*rec_loss
 
             elif args.rec_loss and not args.sigmoid_learning:
-                rec_loss = F.l1_loss(x_0_predict, real_data)
+                rec_loss = F.l1_loss(x_0_predict_latent, real_data_latent)
                 errG = errG + rec_loss
 
             # VGG Loss
             if args.use_vgg_loss:
-                with torch.no_grad():
-                    fake_vgg_input = (torch.clamp(x_0_predict * args.scale_factor, -1, 1) + 1) / 2
-                    real_vgg_input = (torch.clamp(real_data * args.scale_factor, -1, 1) + 1) / 2
-                fake_features = vgg_feature_extractor(fake_vgg_input)
-                real_features = vgg_feature_extractor(real_vgg_input)
+                fake_features = vgg_feature_extractor(fake_sample_vgg_input)
+                real_features = vgg_feature_extractor(real_data_vgg_input)
                 vgg_loss = 0.0
                 for fake_feature, real_feature in zip(fake_features, real_features):
                     vgg_loss += F.mse_loss(fake_feature, real_feature)
                 
                 if args.sigmoid_learning and args.rec_loss:
                     errG = errG + alpha[epoch] * vgg_loss
-                else:    
+                else :
                     errG = errG + args.vgg_loss_weight * vgg_loss
 
             errG.backward()
@@ -405,15 +408,15 @@ def train(rank, gpu, args):
 
             ########################################
             x_t_1 = torch.randn_like(posterior.sample())
-            fake_sample = sample_from_model(
+            fake_sample_latent = sample_from_model(
                 pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 
             """############## CHANGE HERE: DECODER ##############"""
-            fake_sample *= args.scale_factor #300
-            real_data *= args.scale_factor #300
+            fake_sample_latent *= args.scale_factor #300
+            real_data_latent *= args.scale_factor #300
             with torch.no_grad():
-                fake_sample = AutoEncoder.decode(fake_sample)
-                real_data = AutoEncoder.decode(real_data)
+                fake_sample = AutoEncoder.decode(fake_sample_latent)
+                real_data = AutoEncoder.decode(real_data_latent)
 
             fake_sample = (torch.clamp(fake_sample, -1, 1) + 1) / 2  # 0-1
             real_data = (torch.clamp(real_data, -1, 1) + 1) / 2  # 0-1
