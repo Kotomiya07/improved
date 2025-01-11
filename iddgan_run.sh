@@ -51,7 +51,7 @@ if [[ $MODE == train ]]; then
 			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
 			--rec_loss \
 			--sigmoid_learning \
-			--use_vgg_loss
+			--use_vgg_loss --vgg_loss_weight 0.01
 	
 	elif [[ $DATASET == cifar10-nz100-seed42 ]]; then
 		python3 train_iddgan.py --dataset cifar10 --exp cifar10-nz100-seed42 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \

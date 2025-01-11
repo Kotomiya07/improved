@@ -359,7 +359,7 @@ def train(rank, gpu, args):
                     vgg_loss += F.mse_loss(fake_feature, real_feature)
                 
                 if args.sigmoid_learning and args.rec_loss:
-                    errG = errG + alpha[epoch] * vgg_loss
+                    errG = errG + alpha[epoch] * args.vgg_loss_weight * vgg_loss
                 else :
                     errG = errG + args.vgg_loss_weight * vgg_loss
 
