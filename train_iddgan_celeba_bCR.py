@@ -8,7 +8,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
-from torchvision import transforms
 from datasets_prep.dataset import create_dataset
 from diffusion import sample_from_model, sample_posterior, \
     q_sample_pairs, get_time_schedule, \
@@ -24,59 +23,11 @@ from omegaconf import OmegaConf
 import wandb
 from copy import deepcopy
 from collections import OrderedDict
+from PIL import Image as PILImage
+from torchmetrics.image.fid import FrechetInceptionDistance
 
-class ProbLoss(nn.Module):
-    def __init__(self, opt):
-        assert opt["loss_type"] in ["bce", "hinge"]
-        super().__init__()
-        self.loss_type = opt["loss_type"]
-        self.device = opt["device"]
-        self.ones = torch.ones(opt["batch_size"]).to(opt["device"])
-        self.zeros = torch.zeros(opt["batch_size"]).to(opt["device"])
-        self.bce = nn.BCEWithLogitsLoss()
-
-    def __call__(self, logits, condition):
-        assert condition in ["gen", "disc_real", "disc_fake"]
-        batch_len = len(logits)
-
-        if self.loss_type == "bce":
-            if condition in ["gen", "disc_real"]:
-                return self.bce(logits, self.ones[:batch_len])
-            else:
-                return self.bce(logits, self.zeros[:batch_len])
-        
-        elif self.loss_type == "hinge":
-        # SPADEでのHinge lossを参考に実装
-        # https://github.com/NVlabs/SPADE/blob/master/models/networks/loss.py        
-            if condition == "gen":
-                # Generatorでは、本物になるようにHinge lossを返す
-                return -torch.mean(logits)
-            elif condition == "disc_real":
-                minval = torch.min(logits - 1, self.zeros[:batch_len])
-                return -torch.mean(minval)
-            else:
-                minval = torch.min(-logits - 1, self.zeros[:batch_len])
-                return -torch.mean(minval)
-
-@torch.no_grad()
-def update_ema(ema_model, model, decay=0.9999):
-    """
-    Step the EMA model towards the current model.
-    """
-    ema_params = OrderedDict(ema_model.named_parameters())
-    model_params = OrderedDict(model.named_parameters())
-
-    for name, param in model_params.items():
-        name = name.replace("module.", "")
-        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
-        ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
-
-def requires_grad(model, flag=True):
-    """
-    Set requires_grad flag for all parameters in a model.
-    """
-    for p in model.parameters():
-        p.requires_grad = flag
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
 
 def load_model_from_config(config_path, ckpt):
     print(f"Loading model from {ckpt}")
@@ -105,7 +56,7 @@ def grad_penalty_call(args, D_real, x_t):
     grad_penalty = args.r1_gamma / 2 * grad_penalty
     grad_penalty.backward()
 
-
+# %%
 def train(rank, gpu, args):
     from EMA import EMA
     from score_sde.models.discriminator import Discriminator_large, Discriminator_small
@@ -138,6 +89,7 @@ def train(rank, gpu, args):
     disc_net = [Discriminator_small, Discriminator_large]
     print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = gen_net(args).to(device)
+    print("model loaded!")
 
     if args.dataset in ['cifar10', 'stl10']:
         netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
@@ -156,11 +108,11 @@ def train(rank, gpu, args):
     optimizerG = optim.Adam(filter(lambda p: p.requires_grad, netG.parameters(
     )), lr=args.lr_g, betas=(args.beta1, args.beta2))
 
-    #if args.use_ema:
-    #    optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
+    if args.use_ema:
+        optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
     
-    ema = deepcopy(netG).to(device)  # Create an EMA of the model for use after training
-    requires_grad(ema, False)
+    #ema = deepcopy(netG).to(device)  # Create an EMA of the model for use after training
+    #requires_grad(ema, False)
 
     schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizerG, args.num_epoch, eta_min=1e-5)
@@ -168,7 +120,8 @@ def train(rank, gpu, args):
         optimizerD, args.num_epoch, eta_min=1e-5)
 
     # ddp
-    netG = nn.parallel.DistributedDataParallel(netG, device_ids=[gpu])
+    netG = nn.parallel.DistributedDataParallel(
+        netG, device_ids=[gpu])
     netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     """############### DELETE TO AVOID ERROR ###############"""
@@ -182,16 +135,15 @@ def train(rank, gpu, args):
         
     
     #load encoder and decoder
-    config_path = args.AutoEncoder_config 
-    ckpt_path = args.AutoEncoder_ckpt 
+    config_path = args.AutoEncoder_config
+    ckpt_path = args.AutoEncoder_ckpt
     
-    #if args.dataset in ['cifar10', 'stl10'] or True:
+    #if args.dataset in ['cifar10', 'stl10', 'afhq_cat']:
 
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
 
     AutoEncoder = instantiate_from_config(config['model'])
-
 
     checkpoint = torch.load(ckpt_path, map_location=device)
     AutoEncoder.load_state_dict(checkpoint['state_dict'])
@@ -243,46 +195,75 @@ def train(rank, gpu, args):
     gamma = 6
     beta = np.linspace(-gamma, gamma, args.num_epoch+1)
     alpha = 1 - 1 / (1+np.exp(-beta))
-
-    # 拡張の候補を定義
-    augment = transforms.RandomChoice([
-        transforms.RandomCrop(args.image_size, padding=4, padding_mode="reflect"), # ランダムな位置で切り取り
-        transforms.RandomResizedCrop(size=args.image_size, scale=(0.8, 1.2)),    # ズームインとズームアウト
-        transforms.RandomRotation(degrees=30),                                   # 左右30度までのローテート
-    ])
     
+    #update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
+    #ema.eval()
+
     print(f"AutoEncoder Parameters: {sum(p.numel() for p in AutoEncoder.parameters()):,}")
     print(f"Generator Parameters: {sum(p.numel() for p in netG.parameters()):,}")
     print(f"Discriminator Parameters: {sum(p.numel() for p in netD.parameters()):,}")
 
-    loss = ProbLoss({"device":device, "batch_size":args.batch_size, "loss_type":args.loss_type})
-    loss_mse = nn.MSELoss()
-    
-    update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
-    ema.eval()
+    list_augments = [
+        torchvision.transforms.RandomCrop(args.image_size, padding=4, padding_mode="reflect"), # ランダムな位置で切り取り
+        torchvision.transforms.RandomResizedCrop(size=args.image_size, scale=(0.8, 1.2)),    # ズームインとズームアウト
+        torchvision.transforms.RandomRotation(degrees=30),                                   # 左右30度までのローテート
+    ]
+
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+
+    start_epoch = torch.cuda.Event(enable_timing=True)
+    end_epoch = torch.cuda.Event(enable_timing=True)
+
+    # Initialize FID metric
+    fid = FrechetInceptionDistance(feature=2048).to(device)
+
+    # Prepare a fixed set of real images for FID calculation
+    # if rank == 0:
+    #     real_images_fid = []
+    #     num_fid_images = 100 # You can adjust the number of real images for FID
+    #     count = 0
+    #     with torch.no_grad():
+    #         for x, _ in data_loader:
+    #             real_x0 = x.to(device, non_blocking=True)
+    #             posterior_real = AutoEncoder.encode(real_x0)
+    #             real_data_fid_batch = posterior_real.sample().detach()
+    #             real_data_fid_batch *= args.scale_factor
+    #             real_data_fid_batch = AutoEncoder.decode(real_data_fid_batch)
+    #             real_data_fid_batch = (torch.clamp(real_data_fid_batch, -1, 1) + 1) / 2
+    #             real_images_fid.append(real_data_fid_batch)
+    #             count += real_x0.size(0)
+    #             if count >= num_fid_images:
+    #                 break
+    #     real_images_fid = torch.cat(real_images_fid[:(num_fid_images + batch_size -1) // batch_size * batch_size])[:num_fid_images] # Ensure consistent size
+    #     # Accumulate statistics for real images once
+    #     fid.update((real_images_fid * 255).to(torch.uint8), real=True)
+    #     del real_images_fid
+    #     torch.distributed.barrier()
+    # else:
+    #     torch.distributed.barrier()
 
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
-
+        start_epoch.record()
         for iteration, (x, y) in enumerate(data_loader):
-            requires_grad(netD)
+            start.record()
+            for p in netD.parameters():
+                p.requires_grad = True
             netD.zero_grad()
 
-            requires_grad(netG, flag=False)
+            for p in netG.parameters():
+                p.requires_grad = False
 
             # sample from p(x_0)
-            x0 = x.to(device, non_blocking=True)
-            x0_aug = augment(x0)
+            real_x0 = x.to(device, non_blocking=True)
 
             """################# Change here: Encoder #################"""
             with torch.no_grad():
-                posterior = AutoEncoder.encode(x0)
-                real_data = posterior.detach()
-                posterior_aug = AutoEncoder.encode(x0_aug)
-                real_data_aug = posterior_aug.detach()
+                posterior_real = AutoEncoder.encode(real_x0)
+                real_data = posterior_real.detach()
             #print("MIN:{}, MAX:{}".format(real_data.min(), real_data.max()))
             real_data = real_data / args.scale_factor #300.0  # [-1, 1]
-            real_data_aug = real_data_aug / args.scale_factor #300.0  # [-1, 1]
             
             
             #assert -1 <= real_data.min() < 0
@@ -292,69 +273,79 @@ def train(rank, gpu, args):
             t = torch.randint(0, args.num_timesteps,
                               (real_data.size(0),), device=device)
 
-            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
-            x_t_aug, x_tp1_aug = q_sample_pairs(coeff, real_data_aug, t)
-            x_t.requires_grad = True
-            x_t_aug.requires_grad = True
+            real_x_t, real_x_tp1 = q_sample_pairs(coeff, real_data, t)
+            real_x_t.requires_grad = True
 
-            # train with real
-            D_real = netD(x_t, t, x_tp1.detach()).view(-1)
-            D_real_aug = netD(x_t_aug, t, x_tp1_aug.detach()).view(-1)
-           
+            # Train discriminator with real data
+            D_real = netD(real_x_t, t, real_x_tp1.detach()).view(-1)
+            errD_real = F.softplus(-D_real).mean()
+
+            # Apply consistency regularization for real data
+            augment = torchvision.transforms.RandomChoice(list_augments)
+            if args.lambda_real > 0:
+                # Apply augmentation to real data (define your augmentation function t)
+                augmented_real_data = augment(real_data.detach())
+                
+                augmented_real_x_t, augmented_real_x_tp1 = q_sample_pairs(coeff, augmented_real_data, t)
+                D_augmented_real = netD(augmented_real_x_t, t, augmented_real_x_tp1.detach()).view(-1)
+                errD_real_consistency = F.mse_loss(D_real, D_augmented_real)
+                errD_real_bCR = args.lambda_real * errD_real_consistency
+                errD_real = errD_real + errD_real_bCR
+
+            errD_real.backward(retain_graph=True)
+
+            if args.lazy_reg is None:
+                grad_penalty_call(args, D_real, real_x_t)
+            else:
+                if global_step % args.lazy_reg == 0:
+                    grad_penalty_call(args, D_real, real_x_t)
 
             # train with fake
             latent_z = torch.randn(batch_size, nz, device=device)
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
-            x_0_predict_aug = netG(x_tp1_aug.detach(), t, latent_z.detach())
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
-            x_pos_sample_aug = sample_posterior(pos_coeff, x_0_predict_aug, x_tp1_aug, t)
-
-            D_fake = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            D_fake_aug = netD(x_pos_sample_aug, t, x_tp1_aug.detach()).view(-1)
+            fake_x0_predict = netG(real_x_tp1.detach(), t, latent_z) # Use real_x_tp1 and t for generating fake samples
             
-            
+            fake_x_t, fake_x_tp1 = q_sample_pairs(coeff, fake_x0_predict, t)
 
-            # bCRの正則化項を追加 (λ_real, λ_fakeはハイパーパラメータ)
-            disc_loss = (loss(D_real, "disc_real") + loss(D_fake, "disc_fake"))
-            real_loss = loss_mse(D_real, D_real_aug)
-            fake_loss = loss_mse(D_fake, D_fake_aug)
-            if args.sigmoid_learning:
-                consistency_loss = disc_loss + alpha[epoch]*args.lambda_real * real_loss + alpha[epoch]*args.lambda_fake * fake_loss
-            else:
-                consistency_loss = disc_loss + args.lambda_real * real_loss + args.lambda_fake * fake_loss
-            
-            optimizerD.zero_grad()
-            consistency_loss.backward(retain_graph=True)
-            
-            if args.lazy_reg is None:
-                grad_penalty_call(args, D_real, x_t)
-            else:
-                if global_step % args.lazy_reg == 0:
-                    grad_penalty_call(args, D_real, x_t)
+            output = netD(fake_x_t, t, fake_x_tp1.detach()).view(-1)
+            errD_fake = F.softplus(output).mean()
 
+            # Apply consistency regularization for fake data (bCR)
+            if args.lambda_fake > 0:
+                # Apply augmentation to generated fake data (define your augmentation function T_fake)
+                augmented_fake_x0_predict = augment(fake_x0_predict.detach()) # Detach to avoid gradient flow through generator
+                
+                augmented_fake_x_t, augmented_fake_x_tp1 = q_sample_pairs(coeff, augmented_fake_x0_predict, t)
+                D_augmented_fake = netD(augmented_fake_x_t, t, augmented_fake_x_tp1.detach()).view(-1)
+                errD_fake_consistency = F.mse_loss(output, D_augmented_fake)
+                errD_fake_bCR = args.lambda_fake * errD_fake_consistency
+                errD_fake = errD_fake + errD_fake_bCR
 
-            errD = consistency_loss
+            errD_fake.backward()
+
+            errD = errD_real + errD_fake
             # Update D
             optimizerD.step()
 
             # update G
-            requires_grad(netD, flag=False)
+            for p in netD.parameters():
+                p.requires_grad = False
 
-            requires_grad(netG)
+            for p in netG.parameters():
+                p.requires_grad = True
             netG.zero_grad()
 
-            t = torch.randint(0, args.num_timesteps,
+            t_gen = torch.randint(0, args.num_timesteps,
                               (real_data.size(0),), device=device)
-            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
+            x_t_gen, x_tp1_gen = q_sample_pairs(coeff, real_data, t_gen) # Use real data for generator training
 
             latent_z = torch.randn(batch_size, nz, device=device)
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
+            x_0_predict = netG(x_tp1_gen.detach(), t_gen, latent_z)
+            x_pos_predict = sample_posterior(pos_coeff, x_0_predict, x_tp1_gen, t_gen)
+            
+            output = netD(x_pos_predict, t_gen, x_tp1_gen.detach()).view(-1)
+            errG = F.softplus(-output).mean()
 
-            output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            errG = loss(output, "gen")
-
-            # reconstructior loss
+            # reconstruction loss
             if args.sigmoid_learning and args.rec_loss:
                 ######alpha
                 rec_loss = F.l1_loss(x_0_predict, real_data)
@@ -364,25 +355,29 @@ def train(rank, gpu, args):
                 rec_loss = F.l1_loss(x_0_predict, real_data)
                 errG = errG + rec_loss
             
-            errG = errG.mean()
-            optimizerG.zero_grad()
+
             errG.backward()
             optimizerG.step()
-            
-            
+
+            end.record()
+            torch.cuda.synchronize()
+            #print("\rIteration time: {:.0f} ms".format(start.elapsed_time(end)), end="")
 
             global_step += 1
-            if iteration % 100 == 0:
-                if rank == 0:
-                    if args.sigmoid_learning:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, alpha: {}'.format(
-                            epoch, iteration, errG.item(), errD.item(), alpha[epoch]))
-                    elif args.rec_loss:
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}, rec_loss: {}'.format(
-                            epoch, iteration, errG.item(), errD.item(), rec_loss.item()))
-                    else:   
-                        print('epoch {} iteration{}, G Loss: {}, D Loss: {}'.format(
-                            epoch, iteration, errG.item(), errD.item()))
+            #if iteration % 100 == 0:
+            if rank == 0:
+                iter_time = start.elapsed_time(end)
+                if args.sigmoid_learning:
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] alpha[{:.4f}]'.format(
+                        epoch, iteration, iter_time, errG.item(), errD.item(), alpha[epoch]), end="")
+                elif args.rec_loss:
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] rec_loss[{:.4f}]'.format(
+                        epoch, iteration, iter_time, errG.item(), errD.item(), rec_loss.item()), end="")
+                else:   
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}]'.format(
+                        epoch, iteration, iter_time, errG.item(), errD.item()), end="")
+
+                wandb.log({"G_loss_iter": errG.item(), "D_loss_iter": errD.item(), "iter_time": iter_time, "D_real_iter": (errD_real + errD_real_bCR).item(), "D_fake_iter": (errD_fake + errD_fake_bCR).item(), "real_bCR_iter": errD_real_bCR.item(), "fake_bCR_iter": errD_fake_bCR.item()})
 
         if not args.no_lr_decay:
 
@@ -390,9 +385,13 @@ def train(rank, gpu, args):
             schedulerD.step()
 
         if rank == 0:
-            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch]})
+            end_epoch.record()
+            torch.cuda.synchronize()
+            epoch_time = start_epoch.elapsed_time(end_epoch)
+            print("\nEpoch time: {:.3f} s".format(epoch_time / 1000))
+            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "epoch_time": epoch_time / 1000})
             ########################################
-            x_t_1 = torch.randn_like(posterior)
+            x_t_1 = torch.randn_like(posterior_real)
             fake_sample = sample_from_model(
                 pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 
@@ -412,10 +411,20 @@ def train(rank, gpu, args):
                 exp_path, 'sample_discrete_epoch_{}.png'.format(epoch)))
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
+            # Calculate FID
+            #with torch.no_grad():
+            #    fid.update((real_data * 255).to(torch.uint8), real=True)
+            #    fid.update((fake_sample * 255).to(torch.uint8), real=False)
+            #    current_fid = fid.compute()
+            #    wandb.log({"FID": current_fid})
+            #    fid.reset() # Reset FID metric for the next iteration
+
+            wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])], "real_data": [wandb.Image(real_data[:4])]})
+            
 
             if args.save_content:
                 if epoch % args.save_content_every == 0:
-                    print('Saving content.')
+                    print('\nSaving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
                                'netG_dict': netG.state_dict(), 'optimizerG': optimizerG.state_dict(),
                                'schedulerG': schedulerG.state_dict(), 'netD_dict': netD.state_dict(),
@@ -423,18 +432,18 @@ def train(rank, gpu, args):
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
-                update_ema(ema, netG)
-                #if args.use_ema:
-                #    optimizerG.swap_parameters_with_ema(
-                #        store_params_in_ema=True)
+                if args.use_ema:
+                    optimizerG.swap_parameters_with_ema(
+                        store_params_in_ema=True)
 
                 torch.save(netG.state_dict(), os.path.join(
                     exp_path, 'netG_{}.pth'.format(epoch)))
-                #if args.use_ema:
-                #    optimizerG.swap_parameters_with_ema(
-                #        store_params_in_ema=True)
+                if args.use_ema:
+                    optimizerG.swap_parameters_with_ema(
+                        store_params_in_ema=True)
+    
 
-
+# %%
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('ddgan parameters')
     parser.add_argument('--seed', type=int, default=1024,
@@ -514,7 +523,7 @@ if __name__ == '__main__':
                         help='learning rate d')
     parser.add_argument('--beta1', type=float, default=0.5,
                         help='beta1 for adam')
-    parser.add_argument('--beta2', type=float, default=0.999,
+    parser.add_argument('--beta2', type=float, default=0.9,
                         help='beta2 for adam')
     parser.add_argument('--no_lr_decay', action='store_true', default=False)
 
@@ -563,26 +572,100 @@ if __name__ == '__main__':
     ##### My parameter #####
     parser.add_argument('--scale_factor', type=float, default=16.,
                         help='scale of Encoder output')
-    parser.add_argument("--img_rec_loss", action="store_true", default=True)
     parser.add_argument(
         '--AutoEncoder_config', default='./autoencoder/config/autoencoder_kl_f2_16x16x4_Cifar10_big.yaml', help='path of config file for AntoEncoder')
 
     parser.add_argument(
         '--AutoEncoder_ckpt', default='./autoencoder/weight/last_big.ckpt', help='path of weight for AntoEncoder')
-    parser.add_argument("--sigmoid_learning", action="store_true")
-
     
+    parser.add_argument("--sigmoid_learning", action="store_true")
     parser.add_argument("--class_conditional", action="store_true", default=False)
     
-    parser.add_argument('--loss_type', type=str, default='bce', help='loss type bce or hinge')
-
     # bCRのハイパーパラメータを追加
-    parser.add_argument('--lambda_fake', type=float, default=2.0, help='bCR regularization strength for fake images')
-    parser.add_argument('--lambda_real', type=float, default=2.0, help='bCR regularization strength for real images')
+    parser.add_argument('--lambda_fake', type=float, default=10.0, help='bCR regularization strength for fake images')
+    parser.add_argument('--lambda_real', type=float, default=10.0, help='bCR regularization strength for real images')
+    
+    
     args = parser.parse_args()
 
     args.world_size = args.num_proc_node * args.num_process_per_node
     size = args.num_process_per_node
+
+    wandb.init(
+        project="iddgan-original",
+        name=args.exp,
+        # すべてのパラメータをログに記録
+        config={
+            "seed": args.seed,
+            "image_size": args.image_size,
+            "num_channels": args.num_channels,
+            "centered": args.centered,
+            "use_geometric": args.use_geometric,
+            "beta_min": args.beta_min,
+            "beta_max": args.beta_max,
+            "patch_size": args.patch_size,
+            "num_channels_dae": args.num_channels_dae,
+            "n_mlp": args.n_mlp,
+            "ch_mult": args.ch_mult,
+            "num_res_blocks": args.num_res_blocks,
+            "attn_resolutions": args.attn_resolutions,
+            "dropout": args.dropout,
+            "resamp_with_conv": args.resamp_with_conv,
+            "conditional": args.conditional,
+            "fir": args.fir,
+            "fir_kernel": args.fir_kernel,
+            "skip_rescale": args.skip_rescale,
+            "resblock_type": args.resblock_type,
+            "progressive": args.progressive,
+            "progressive_input": args.progressive_input,
+            "progressive_combine": args.progressive_combine,
+            "embedding_type": args.embedding_type,
+            "fourier_scale": args.fourier_scale,
+            "not_use_tanh": args.not_use_tanh,
+            "exp": args.exp,
+            "dataset": args.dataset,
+            "datadir": args.datadir,
+            "nz": args.nz,
+            "num_timesteps": args.num_timesteps,
+            "z_emb_dim": args.z_emb_dim,
+            "t_emb_dim": args.t_emb_dim,
+            "batch_size": args.batch_size,
+            "num_epoch": args.num_epoch,
+            "ngf": args.ngf,
+            "lr_g": args.lr_g,
+            "lr_d": args.lr_d,
+            "beta1": args.beta1,
+            "beta2": args.beta2,
+            "no_lr_decay": args.no_lr_decay,
+            "use_ema": args.use_ema,
+            "ema_decay": args.ema_decay,
+            "r1_gamma": args.r1_gamma,
+            "lazy_reg": args.lazy_reg,
+            "current_resolution": args.current_resolution,
+            "use_pytorch_wavelet": args.use_pytorch_wavelet,
+            "rec_loss": args.rec_loss,
+            "net_type": args.net_type,
+            "num_disc_layers": args.num_disc_layers,
+            "no_use_fbn": args.no_use_fbn,
+            "no_use_freq": args.no_use_freq,
+            "no_use_residual": args.no_use_residual,
+            "save_content": args.save_content,
+            "save_content_every": args.save_content_every,
+            "save_ckpt_every": args.save_ckpt_every,
+            "num_proc_node": args.num_proc_node,
+            "num_process_per_node": args.num_process_per_node,
+            "node_rank": args.node_rank,
+            "local_rank": args.local_rank,
+            "master_address": args.master_address,
+            "master_port": args.master_port,
+            "num_workers": args.num_workers,
+            "scale_factor": args.scale_factor,
+            "AutoEncoder_config": args.AutoEncoder_config,
+            "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
+            "sigmoid_learning": args.sigmoid_learning,
+            "class_conditional": args.class_conditional,
+        }
+    )
 
     if size > 1:
         processes = []
@@ -599,39 +682,9 @@ if __name__ == '__main__':
             processes.append(p)
 
         for p in processes:
+            
             p.join()
     else:
         print('starting in debug mode')
-        wandb.init(
-            project="IDDGAN_bCR",
-            config={
-                "dataset": args.dataset,
-                "image_size": args.image_size,
-                "channels": args.num_channels,
-                "timesteps": args.num_timesteps,
-                "nz": args.nz,
-                "epochs": args.num_epoch,
-                "ngf": args.ngf,
-                "lr_g": args.lr_g,
-                "lr_d": args.lr_d,
-                "batch_size": args.batch_size,
-                "r1_gamma": args.r1_gamma,
-                "lazy_reg": args.lazy_reg,
-                "use_ema": args.use_ema,
-                "ema_decay": args.ema_decay,
-                "no_lr_decay": args.no_lr_decay,
-                "use_pytorch_wavelet": args.use_pytorch_wavelet,
-                "rec_loss": args.rec_loss,
-                "net_type": args.net_type,
-                "num_disc_layers": args.num_disc_layers,
-                "no_use_fbn": args.no_use_fbn,
-                "no_use_freq": args.no_use_freq,
-                "no_use_residual": args.no_use_residual,
-                "scale_factor": args.scale_factor,
-                "AutoEncoder_config": args.AutoEncoder_config,
-                "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
-                "sigmoid_learning": args.sigmoid_learning,
-            }
-        )
         init_processes(0, size, train, args)
-        
+        wandb.finish()

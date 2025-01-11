@@ -27,7 +27,7 @@ if [[ $MODE == train ]]; then
 	echo "==> Training IDDGAN"
 
 	if [[ $DATASET == cifar10 ]]; then
-		python3 train_iddgan.py --dataset cifar10 --exp cifar10-nz50 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+		python3 train_iddgan.py --dataset cifar10 --exp cifar10-test --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 2000 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
 			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
@@ -657,13 +657,13 @@ if [[ $MODE == train ]]; then
 			--sigmoid_learning \
 			--resblock_type biggan_with_dit
     
-    elif [[ $DATASET == celeba_256_bCR ]]; then
-		python3 train_iddgan_celeba_bCR.py --dataset celeba_256 --image_size 256 --exp vq-f4-256-bCR --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \
+    elif [[ $DATASET == celeba-256-bCR ]]; then
+		python3 train_iddgan_celeba_bCR.py --dataset celeba_256 --image_size 256 --exp vq-f4-256-bCR-lambda3 --num_channels 3 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 2 \
 			--num_res_blocks 2 --batch_size 32 --num_epoch 500 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 2. \
 			--nz 100 --z_emb_dim 256 --lr_d 1.0e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/celeba/celeba-lmdb/ \
 			--master_port $MASTER_PORT --num_process_per_node $GPUS \
 			--current_resolution 64 --attn_resolution 16 --num_disc_layers 4 --rec_loss \
-			--save_content_every 5 \
+			--save_content_every 5 --save_ckpt_every 5\
 			--AutoEncoder_config ./autoencoder/config/vq-f4.yaml \
 			--AutoEncoder_ckpt ./autoencoder/weight/vq-f4.ckpt \
 			--scale_factor 6.0 \

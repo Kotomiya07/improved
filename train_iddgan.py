@@ -25,8 +25,8 @@ from copy import deepcopy
 from collections import OrderedDict
 from PIL import Image as PILImage
 
-#torch.backends.cudnn.benchmark = True
-#torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
 
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
