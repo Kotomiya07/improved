@@ -50,6 +50,8 @@ WaveletResnetBlockBigGAN = layerspp.WaveletResnetBlockBigGANpp_Adagn
 
 ResnetBlockBigGAN_with_DiT = layerspp.ResnetBlockBigGANpp_Adagn_with_DiT
 
+ResnetBlockBigGAN_SpectralNorm = layerspp.ResnetBlockBigGANpp_Adagn_SpectralNorm
+
 Combine = layerspp.Combine
 conv3x3 = layerspp.conv3x3
 conv1x1 = layerspp.conv1x1
@@ -194,6 +196,17 @@ class NCSNpp(nn.Module):
                                             temb_dim=nf * 4,
                                             zemb_dim=z_emb_dim,
                                             depth=config.depth,)
+
+        elif resblock_type == 'biggan_spectralnorm':
+            ResnetBlock = functools.partial(ResnetBlockBigGAN_SpectralNorm,
+                                            act=act,
+                                            dropout=dropout,
+                                            fir=fir,
+                                            fir_kernel=fir_kernel,
+                                            init_scale=init_scale,
+                                            skip_rescale=skip_rescale,
+                                            temb_dim=nf * 4,
+                                            zemb_dim=z_emb_dim)
 
         else:
             raise ValueError(f'resblock type {resblock_type} unrecognized.')
