@@ -35,7 +35,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from . import dense_layer, layers, up_or_down_sampling
-from core_layers import SpectralNorm
+from .core_layers import SpectralNorm
 
 conv1x1 = layers.ddpm_conv1x1
 conv3x3 = layers.ddpm_conv3x3
