@@ -79,7 +79,7 @@ def grad_penalty_call(args, D_real, x_t):
 # %%
 def train(rank, gpu, args):
     from EMA import EMA
-    from score_sde.models.discriminator import Discriminator_large, Discriminator_small
+    from score_sde.models.discriminator import Discriminator_large, Discriminator_small, Discriminator_small_Spectral_Norm
     from score_sde.models.ncsnpp_generator_adagn import NCSNpp, WaveletNCSNpp
 
     torch.manual_seed(args.seed + rank)
@@ -106,19 +106,29 @@ def train(rank, gpu, args):
     args.image_size = args.current_resolution
     G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
     gen_net = G_NET_ZOO[args.net_type]
-    disc_net = [Discriminator_small, Discriminator_large]
-    print("GEN: {}, DISC: {}".format(gen_net, disc_net))
+    disc_net = [Discriminator_small, Discriminator_large, Discriminator_small_Spectral_Norm]
+    #print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     netG = gen_net(args).to(device)
-    print("model loaded!")
+    #print("model loaded!")
 
-    if args.dataset in ['cifar10', 'stl10']:
-        netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
-                           t_emb_dim=args.t_emb_dim,
-                           act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
+    if args.use_spectral_norm:
+        netD = disc_net[2](nc=2 * args.num_channels, ngf=args.ngf,
+                            t_emb_dim=args.t_emb_dim,
+                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
+        print(f"Disc: {disc_net[2]}")
     else:
-        netD = disc_net[1](nc=2 * args.num_channels, ngf=args.ngf,
-                           t_emb_dim=args.t_emb_dim,
-                           act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
+        if args.dataset in ['cifar10', 'stl10']:
+            netD = disc_net[0](nc=2 * args.num_channels, ngf=args.ngf,
+                            t_emb_dim=args.t_emb_dim,
+                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
+            print(f"Disc: {disc_net[0]}")
+        else:
+            netD = disc_net[1](nc=2 * args.num_channels, ngf=args.ngf,
+                            t_emb_dim=args.t_emb_dim,
+                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
+            print(f"Disc: {disc_net[1]}")
+    
+    
 
     broadcast_params(netG.parameters())
     broadcast_params(netD.parameters())
@@ -551,6 +561,7 @@ if __name__ == '__main__':
     parser.add_argument("--alpha_type", default="sigmoid", choices=["tanh", "sigmoid", "sinarctan"])
 
     parser.add_argument("--num_disc_updates", type=int, default=5, help="number of discriminator updates per generator update")
+    parser.add_argument("--use_spectral_norm", action="store_true", default=False)
     
     args = parser.parse_args()
 
@@ -630,6 +641,9 @@ if __name__ == '__main__':
             "AutoEncoder_ckpt": args.AutoEncoder_ckpt,
             "sigmoid_learning": args.sigmoid_learning,
             "class_conditional": args.class_conditional,
+            "alpha_type": args.alpha_type,
+            "num_disc_updates": args.num_disc_updates,
+            "use_spectral_norm": args.use_spectral_norm
         }
     )
 

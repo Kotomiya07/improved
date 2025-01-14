@@ -39,8 +39,8 @@ if [[ $MODE == train ]]; then
 			--rec_loss \
 			--sigmoid_learning
 	
-	elif [[ $DATASET == cifar10-sn ]]; then
-		python3 train_iddgan.py --dataset cifar10 --exp cifar10-spectralnorm --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+	elif [[ $DATASET == cifar10-sn-1 ]]; then
+		python3 train_iddgan.py --dataset cifar10 --exp cifar10-spectralnorm-1 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 2000 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
 			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
@@ -51,10 +51,10 @@ if [[ $MODE == train ]]; then
 			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
 			--rec_loss \
 			--sigmoid_learning \
-			--resblock_type biggan_spectralnorm
+			--use_spectral_norm --num_disc_updates 1
 	
-	elif [[ $DATASET == cifar10-sn-asymmetric-5  ]]; then
-		python3 train_iddgan_spectral_norm.py --dataset cifar10 --exp cifar10-spectralnorm-asymmetric-5 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+	elif [[ $DATASET == cifar10-sn-5  ]]; then
+		python3 train_iddgan_spectral_norm.py --dataset cifar10 --exp cifar10-spectralnorm-5 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 10000 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
 			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
@@ -65,8 +65,7 @@ if [[ $MODE == train ]]; then
 			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
 			--rec_loss \
 			--sigmoid_learning \
-			--resblock_type biggan_spectralnorm \
-			--num_disc_updates 5
+			--use_spectral_norm --num_disc_updates 5
 
 	elif [[ $DATASET == cifar10-vgg ]]; then
 		python3 train_iddgan_vgg.py --dataset cifar10 --exp cifar10-vgg --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
