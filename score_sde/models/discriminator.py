@@ -11,7 +11,7 @@ from einops import rearrange
 
 from . import dense_layer, layers, up_or_down_sampling
 from torch.nn import functional as F
-from .core_layers import SpectralNorm
+from torch.nn.utils import spectral_norm
 
 dense = dense_layer.dense
 conv2d = dense_layer.conv2d
@@ -104,18 +104,18 @@ class DownConvBlockSpectralNorm(nn.Module):
         self.downsample = downsample
 
         self.conv1 = nn.Sequential(
-            SpectralNorm(conv2d(in_channel, out_channel, kernel_size, padding=padding)),
+            spectral_norm(conv2d(in_channel, out_channel, kernel_size, padding=padding)),
         )
 
         self.conv2 = nn.Sequential(
-            SpectralNorm(conv2d(out_channel, out_channel, kernel_size, padding=padding, init_scale=0.))
+            spectral_norm(conv2d(out_channel, out_channel, kernel_size, padding=padding, init_scale=0.))
         )
         self.dense_t1 = dense(t_emb_dim, out_channel)
 
         self.act = act
 
         self.skip = nn.Sequential(
-            SpectralNorm(conv2d(in_channel, out_channel, 1, padding=0, bias=False)),
+            spectral_norm(conv2d(in_channel, out_channel, 1, padding=0, bias=False)),
         )
 
     def forward(self, input, t_emb):
@@ -506,7 +506,7 @@ class Discriminator_small_Spectral_Norm(nn.Module):
         if num_layers >= 4:
             self.conv4 = DownConvBlockSpectralNorm(ngf * 8, ngf * 8, t_emb_dim=t_emb_dim, downsample=True, act=act)
 
-        self.final_conv = conv2d(ngf * 8 + 1, ngf * 8, 3, padding=1, init_scale=0.)
+        self.final_conv = spectral_norm(conv2d(ngf * 8 + 1, ngf * 8, 3, padding=1, init_scale=0.))
         self.end_linear = dense(ngf * 8, 1)
         if use_local_loss:
             self.local_end_linear = dense(ngf * 8, 1)
