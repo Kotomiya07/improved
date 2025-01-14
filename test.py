@@ -135,7 +135,7 @@ def sample_and_test(args):
                 timings[rep] = curr_time
         mean_syn = np.sum(timings) / repetitions
         std_syn = np.std(timings)
-        print("Inference time: {:.2f}+/-{:.2f}ms".format(mean_syn, std_syn))
+        
         exit(0)
 
     if args.compute_fid:
