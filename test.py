@@ -86,7 +86,7 @@ def sample_and_test(args):
 
     iters_needed = 50000 // args.batch_size
 
-    save_dir = "./wddgan_generated_samples/{}/{}".format(args.dataset, args.exp)
+    save_dir = "./wddgan_generated_samples/{}".format(args.dataset)
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     
