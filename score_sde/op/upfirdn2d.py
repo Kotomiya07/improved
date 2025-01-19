@@ -12,18 +12,25 @@ from collections import abc
 import torch
 from torch.autograd import Function
 from torch.nn import functional as F
-from torch.utils.cpp_extension import load
-import upfirdn2d_op
+from torch.utils.cpp_extension import load, _import_module_from_library
+#import upfirdn2d_op
 
 
 module_path = os.path.dirname(__file__)
-""" upfirdn2d_op = load(
-    "upfirdn2d",
-    sources=[
-        os.path.join(module_path, "upfirdn2d.cpp"),
-        os.path.join(module_path, "upfirdn2d_kernel.cu"),
-    ],
-) """
+build_directory = os.path.join(module_path, "build", "upfirdn2d_op")
+os.makedirs(build_directory, exist_ok=True)
+
+try:
+    upfirdn2d_op = _import_module_from_library("upfirdn2d_op", build_directory, True)
+except ImportError:
+    upfirdn2d_op = load(
+        "upfirdn2d",
+        sources=[
+            os.path.join(module_path, "upfirdn2d.cpp"),
+            os.path.join(module_path, "upfirdn2d_kernel.cu"),
+        ],
+        build_directory=build_directory,
+    )
 
 
 class UpFirDn2dBackward(Function):
