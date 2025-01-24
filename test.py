@@ -12,7 +12,8 @@ from pytorch_fid.fid_score import calculate_fid_given_paths
 from score_sde.models.ncsnpp_generator_adagn import NCSNpp, WaveletNCSNpp
 from tqdm import tqdm
 
-
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
 # %%
 def sample_and_test(args):
     torch.manual_seed(args.seed)

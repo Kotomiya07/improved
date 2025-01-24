@@ -12,18 +12,26 @@ import torch
 from torch import nn
 from torch.autograd import Function
 from torch.nn import functional as F
-from torch.utils.cpp_extension import load
-import fused
+from torch.utils.cpp_extension import load, _import_module_from_library
+#import fused
 
 
 module_path = os.path.dirname(__file__)
-""" fused = load(
-    "fused",
-    sources=[
-        os.path.join(module_path, "fused_bias_act.cpp"),
-        os.path.join(module_path, "fused_bias_act_kernel.cu"),
-    ],
-) """
+build_directory = os.path.join(module_path, "build", "fused")
+os.makedirs(build_directory, exist_ok=True)
+
+try:
+    fused = _import_module_from_library("fused", build_directory, True)
+
+except ImportError:
+    fused = load(
+        "fused",
+        sources=[
+            os.path.join(module_path, "fused_bias_act.cpp"),
+            os.path.join(module_path, "fused_bias_act_kernel.cu"),
+        ],
+        build_directory=build_directory,
+    )
 
 
 class FusedLeakyReLUFunctionBackward(Function):
