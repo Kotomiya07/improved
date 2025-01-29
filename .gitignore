@@ -24,4 +24,4 @@ __pycache__/
 /score_sde/*.so
 *.txt
 *.npy
-/score_sde/op/build/*
+score_sde/op/build/
