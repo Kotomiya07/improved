@@ -25,6 +25,9 @@ from copy import deepcopy
 from collections import OrderedDict
 from PIL import Image as PILImage
 
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
+
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
     """
@@ -212,7 +215,14 @@ def train(rank, gpu, args):
     '''Sigmoid learning parameter'''
     gamma = 6
     beta = np.linspace(-gamma, gamma, args.num_epoch+1)
-    alpha = 1 - 1 / (1+np.exp(-beta))
+    if args.alpha_type == "tanh":
+        alpha = 1 - 0.5 * (1 + np.tanh(beta))
+    elif args.alpha_type == "sigmoid":
+        alpha = 1 - 1 / (1+np.exp(-beta))
+    elif args.alpha_type == "sinarctan":
+        alpha = (1 - (beta / np.sqrt(1 + beta**2))) * 0.5
+    else:
+        alpha = 1 - 1 / (1+np.exp(-beta))
     
     #update_ema(ema, netG, decay=0)  # Ensure EMA is initialized with synced weights
     #ema.eval()
@@ -374,7 +384,6 @@ def train(rank, gpu, args):
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
             
-            # TODO: wandbに画像を保存
             wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])], "real_data": [wandb.Image(real_data[:4])]})
             
 
@@ -536,6 +545,8 @@ if __name__ == '__main__':
     
     parser.add_argument("--sigmoid_learning", action="store_true")
     parser.add_argument("--class_conditional", action="store_true", default=False)
+
+    parser.add_argument("--alpha_type", default="sigmoid", choices=["tanh", "sigmoid", "sinarctan"])
     
     args = parser.parse_args()
 
