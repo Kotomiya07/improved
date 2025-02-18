@@ -33,6 +33,7 @@ dependencies = [
     "torchmetrics[image]>=1.0.3",
     "nvidia-dali-cuda120>=1.44.0",
     #"pytorch-fid>=0.3.0",
+    "accelerate>=1.4.0",
 ]
 readme = "README.md"
 requires-python = ">= 3.10"
