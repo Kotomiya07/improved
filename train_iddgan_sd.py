@@ -365,7 +365,7 @@ def train(rank, gpu, args):
             print("\nEpoch time: {:.3f} s".format(epoch_time / 1000))
             wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "epoch_time": epoch_time / 1000})
             ########################################
-            x_t_1 = torch.randn_like(posterior.sample())
+            x_t_1 = torch.randn_like(posterior.latent_dist.sample())
             fake_sample = sample_from_model(
                 pos_coeff, netG, args.num_timesteps, x_t_1, T, args)
 
