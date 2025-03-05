@@ -27,7 +27,7 @@ if [[ $MODE == train ]]; then
 	echo "==> Training IDDGAN"
 
 	if [[ $DATASET == cifar10 ]]; then
-		python3 train_iddgan.py --dataset cifar10 --exp sample --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+		python3 train_iddgan.py --dataset cifar10 --exp cifar10-rec-sigmoid  --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
 			--num_res_blocks 2 --batch_size 256 --num_epoch 2000 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
 			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
 			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
@@ -38,6 +38,30 @@ if [[ $MODE == train ]]; then
 			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
 			--rec_loss \
 			--sigmoid_learning
+
+        elif [[ $DATASET == cifar10-no-rec ]]; then
+		python3 train_iddgan.py --dataset cifar10 --exp cifar10-no-rec  --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 2000 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt  \
+			--sigmoid_learning
+        
+        elif [[ $DATASET == cifar10-rec ]]; then
+		python3 train_iddgan.py --dataset cifar10 --exp cifar10-rec  --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
+			--num_res_blocks 2 --batch_size 256 --num_epoch 2000 --ngf 64 --nz 50 --z_emb_dim 256 --n_mlp 4 --embedding_type positional \
+			--use_ema --ema_decay 0.9999 --r1_gamma 0.02 --lr_d 1.25e-4 --lr_g 1.6e-4 --lazy_reg 15 \
+			--ch_mult 1 2 2 --save_content --datadir ./data/cifar-10 \
+			--master_port $MASTER_PORT --num_process_per_node $GPUS --save_ckpt_every 5 \
+			--current_resolution 16 --attn_resolutions 32 --num_disc_layers 3  --scale_factor 105.0 \
+			--no_lr_decay \
+			--AutoEncoder_config autoencoder/config/kl-f2.yaml \
+			--AutoEncoder_ckpt autoencoder/weight/kl-f2.ckpt \
+			--rec_loss
 	
 	elif [[ $DATASET == cifar10-sn-1 ]]; then
 		python3 train_iddgan_spectral_norm.py --dataset cifar10 --exp cifar10-spectralnorm-1 --num_channels 4 --num_channels_dae 128 --num_timesteps 4 \
@@ -727,7 +751,7 @@ if [[ $MODE == train ]]; then
 	
 	elif [[ $DATASET == lsun-sd ]]; then
 		python3 train_iddgan_sd.py --dataset lsun --image_size 256 --exp sd --num_channels 4 --num_channels_dae 128 --ch_mult 1 2 2 2 --num_timesteps 4 \
-			--num_res_blocks 3 --batch_size 8 --num_epoch 8000 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 1. \
+			--num_res_blocks 3 --batch_size 64 --num_epoch 8000 --ngf 64 --embedding_type positional --use_ema --ema_decay 0.999 --r1_gamma 1. \
 			--nz 50 --z_emb_dim 256 --lr_d 1e-4 --lr_g 2e-4 --lazy_reg 10 --save_content --datadir data/lsun/ \
 			--master_port $MASTER_PORT --num_process_per_node $GPUS \
 			--current_resolution 32 --attn_resolution 16 --num_disc_layers 4  \
