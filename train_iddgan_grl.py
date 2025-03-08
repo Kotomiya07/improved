@@ -89,6 +89,32 @@ class GradientReversalLayer(torch.autograd.Function):
 def gradient_reversal_layer(x):
     return GradientReversalLayer.apply(x)
 
+class GAN(nn.Module):
+    def __init__(self, gen, dis, coeff, pos_coeff, device='cuda' if torch.cuda.is_available() else 'cpu'):
+        super().__init__()
+        self.device = device
+        self.gen = gen
+        self.dis = dis
+        self.coeff = coeff
+        self.pos_coeff = pos_coeff
+
+    def forward(self, x_real):
+        t = torch.randint(0, args.num_timesteps,
+                              (x_real.size(0),), device=self.device)
+        latent_z = torch.randn(args.batch_size, args.nz, device=self.device)
+        x_t, x_tp1 = q_sample_pairs(self.coeff, x_real, t)
+        x_t.requires_grad = True
+
+        x0_fake = self.gen(x_tp1.detach(), t, latent_z)
+        x_fake = sample_posterior(self.pos_coeff, x0_fake, x_tp1, t)
+        y_fake = self.dis(gradient_reversal_layer(x_fake) , t, x_tp1.detach()).view(-1)
+        y_real = self.dis(x_t, t, x_tp1.detach()).view(-1)
+
+        loss_fake = F.softplus(y_fake).mean()
+        loss_real = F.softplus(-y_real).mean()
+
+        return loss_fake, loss_real
+
 
 # %%
 def train(rank, gpu, args):
@@ -133,30 +159,6 @@ def train(rank, gpu, args):
         netD = disc_net[1](nc=2 * args.num_channels, ngf=args.ngf,
                            t_emb_dim=args.t_emb_dim,
                            act=nn.LeakyReLU(0.2), num_layers=args.num_disc_layers).to(device)
-
-    broadcast_params(netG.parameters())
-    broadcast_params(netD.parameters())
-
-    optimizerD = optim.Adam(filter(lambda p: p.requires_grad, netD.parameters(
-    )), lr=args.lr_d, betas=(args.beta1, args.beta2))
-    optimizerG = optim.Adam(filter(lambda p: p.requires_grad, netG.parameters(
-    )), lr=args.lr_g, betas=(args.beta1, args.beta2))
-
-    if args.use_ema:
-        optimizerG = EMA(optimizerG, ema_decay=args.ema_decay)
-    
-    #ema = deepcopy(netG).to(device)  # Create an EMA of the model for use after training
-    #requires_grad(ema, False)
-
-    schedulerG = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizerG, args.num_epoch, eta_min=1e-5)
-    schedulerD = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizerD, args.num_epoch, eta_min=1e-5)
-
-    # ddp
-    netG = nn.parallel.DistributedDataParallel(
-        netG, device_ids=[gpu])
-    netD = nn.parallel.DistributedDataParallel(netD, device_ids=[gpu])
 
     """############### DELETE TO AVOID ERROR ###############"""
     # Wavelet Pooling
@@ -206,25 +208,25 @@ def train(rank, gpu, args):
     pos_coeff = Posterior_Coefficients(args, device)
     T = get_time_schedule(args, device)
 
-    if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
-        checkpoint_file = os.path.join(exp_path, 'content.pth')
-        checkpoint = torch.load(checkpoint_file, map_location=device)
-        init_epoch = checkpoint['epoch']
-        epoch = init_epoch
-        # load G
-        netG.load_state_dict(checkpoint['netG_dict'])
-        #optimizerG.load_state_dict(checkpoint['optimizerG'])
-        schedulerG.load_state_dict(checkpoint['schedulerG'])
-        # load D
-        netD.load_state_dict(checkpoint['netD_dict'])
-        #optimizerD.load_state_dict(checkpoint['optimizerD'])
-        schedulerD.load_state_dict(checkpoint['schedulerD'])
+    # if args.resume or os.path.exists(os.path.join(exp_path, 'content.pth')):
+    #     checkpoint_file = os.path.join(exp_path, 'content.pth')
+    #     checkpoint = torch.load(checkpoint_file, map_location=device)
+    #     init_epoch = checkpoint['epoch']
+    #     epoch = init_epoch
+    #     # load G
+    #     netG.load_state_dict(checkpoint['netG_dict'])
+    #     #optimizerG.load_state_dict(checkpoint['optimizerG'])
+    #     schedulerG.load_state_dict(checkpoint['schedulerG'])
+    #     # load D
+    #     netD.load_state_dict(checkpoint['netD_dict'])
+    #     #optimizerD.load_state_dict(checkpoint['optimizerD'])
+    #     schedulerD.load_state_dict(checkpoint['schedulerD'])
 
-        global_step = checkpoint['global_step']
-        print("=> loaded checkpoint (epoch {})"
-              .format(checkpoint['epoch']))
-    else:
-        global_step, epoch, init_epoch = 0, 0, 0
+    #     global_step = checkpoint['global_step']
+    #     print("=> loaded checkpoint (epoch {})"
+    #           .format(checkpoint['epoch']))
+    # else:
+    #     global_step, epoch, init_epoch = 0, 0, 0
 
     '''Sigmoid learning parameter'''
     gamma = 6
@@ -251,19 +253,32 @@ def train(rank, gpu, args):
     start_epoch = torch.cuda.Event(enable_timing=True)
     end_epoch = torch.cuda.Event(enable_timing=True)
 
+    model = GAN(netG, netD, coeff, pos_coeff, device)
+
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters(
+    )), lr=args.lr_g, betas=(args.beta1, args.beta2))
+    
+    if args.use_ema:
+        optimizer = EMA(optimizer, ema_decay=args.ema_decay)
+    
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, args.num_epoch, eta_min=1e-5)
+    
+    global_step, epoch, init_epoch = 0, 0, 0
+
+    broadcast_params(model.parameters())
+
+    # ddp
+    model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
+    
 
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
         start_epoch.record()
         for iteration, (x, y) in enumerate(data_loader):
             start.record()
-            for p in netD.parameters():
-                p.requires_grad = True
-            netD.zero_grad()
-
-            for p in netG.parameters():
-                p.requires_grad = False
-
+            model.train()
+            optimizer.zero_grad()
             # sample from p(x_0)
             x0 = x.to(device, non_blocking=True)
 
@@ -278,71 +293,26 @@ def train(rank, gpu, args):
             #assert -1 <= real_data.min() < 0
             #assert 0 < real_data.max() <= 1
             """################# End change: Encoder #################"""
-            # sample t
-            t = torch.randint(0, args.num_timesteps,
-                              (real_data.size(0),), device=device)
 
-            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
-            x_t.requires_grad = True
+            loss_fake, loss_real = model(real_data)
+            (loss_fake + loss_real).backward()
+            optimizer.step()
 
-            # train with real
-            D_real = netD(x_t, t, x_tp1.detach()).view(-1)
-            errD_real = F.softplus(-D_real).mean()
+            # if args.lazy_reg is None:
+            #     grad_penalty_call(args, y_real, x_t)
+            # else:
+            #     if global_step % args.lazy_reg == 0:
+            #         grad_penalty_call(args, y_real, x_t)
 
-            errD_real.backward(retain_graph=True)
+            # # reconstructior loss
+            # if args.sigmoid_learning and args.rec_loss:
+            #     ######alpha
+            #     rec_loss = F.l1_loss(x_0_predict, real_data)
+            #     errG = errG + alpha[epoch]*rec_loss
 
-            if args.lazy_reg is None:
-                grad_penalty_call(args, D_real, x_t)
-            else:
-                if global_step % args.lazy_reg == 0:
-                    grad_penalty_call(args, D_real, x_t)
-
-            # train with fake
-            latent_z = torch.randn(batch_size, nz, device=device)
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
-
-            output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            errD_fake = F.softplus(output).mean()
-
-            errD_fake.backward()
-
-            errD = errD_real + errD_fake
-            # Update D
-            optimizerD.step()
-
-            # update G
-            for p in netD.parameters():
-                p.requires_grad = False
-
-            for p in netG.parameters():
-                p.requires_grad = True
-            netG.zero_grad()
-
-            t = torch.randint(0, args.num_timesteps,
-                              (real_data.size(0),), device=device)
-            x_t, x_tp1 = q_sample_pairs(coeff, real_data, t)
-
-            latent_z = torch.randn(batch_size, nz, device=device)
-            x_0_predict = netG(x_tp1.detach(), t, latent_z)
-            x_pos_sample = sample_posterior(pos_coeff, x_0_predict, x_tp1, t)
-
-            output = netD(x_pos_sample, t, x_tp1.detach()).view(-1)
-            errG = F.softplus(-output).mean()
-
-            # reconstructior loss
-            if args.sigmoid_learning and args.rec_loss:
-                ######alpha
-                rec_loss = F.l1_loss(x_0_predict, real_data)
-                errG = errG + alpha[epoch]*rec_loss
-
-            elif args.rec_loss and not args.sigmoid_learning:
-                rec_loss = F.l1_loss(x_0_predict, real_data)
-                errG = errG + rec_loss
-            
-
-            errG.backward()
-            optimizerG.step()
+            # elif args.rec_loss and not args.sigmoid_learning:
+            #     rec_loss = F.l1_loss(x_0_predict, real_data)
+            #     errG = errG + rec_loss
 
             end.record()
             torch.cuda.synchronize()
@@ -354,28 +324,27 @@ def train(rank, gpu, args):
             if rank == 0:
                 iter_time = start.elapsed_time(end)
                 if args.sigmoid_learning:
-                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] alpha[{:.4f}]'.format(
-                        epoch, iteration, iter_time, errG.item(), errD.item(), alpha[epoch]), end="")
-                elif args.rec_loss:
-                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}] rec_loss[{:.4f}]'.format(
-                        epoch, iteration, iter_time, errG.item(), errD.item(), rec_loss.item()), end="")
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] Loss_Fake[{:.4f}] Loss_Real[{:.4f}] alpha[{:.4f}]'.format(
+                        epoch, iteration, iter_time, loss_fake.item(), loss_real.item(), alpha[epoch]), end="")
+                # elif args.rec_loss:
+                #     print('\r[#{:05}][#{:04}][{:04.0f}ms] Loss_Fake[{:.4f}] Loss_Real[{:.4f}] rec_loss[{:.4f}]'.format(
+                #         epoch, iteration, iter_time, loss_fake.item(), loss_real.item(), rec_loss.item()), end="")
                 else:   
-                    print('\r[#{:05}][#{:04}][{:04.0f}ms] G Loss[{:.4f}] D Loss[{:.4f}]'.format(
-                        epoch, iteration, iter_time, errG.item(), errD.item()), end="")
+                    print('\r[#{:05}][#{:04}][{:04.0f}ms] Loss_Fake[{:.4f}] Loss_Real[{:.4f}]'.format(
+                        epoch, iteration, iter_time, loss_fake.item(), loss_real.item()), end="")
 
-                wandb.log({"G_loss_iter": errG.item(), "D_loss_iter": errD.item(), "iter_time": iter_time})
+                wandb.log({"loss_fake_iter": loss_fake.item(), "loss_real_iter": loss_real.item(), "iter_time": iter_time})
 
         if not args.no_lr_decay:
 
-            schedulerG.step()
-            schedulerD.step()
+            scheduler.step()
 
         if rank == 0:
             end_epoch.record()
             torch.cuda.synchronize()
             epoch_time = start_epoch.elapsed_time(end_epoch)
             print("\nEpoch time: {:.3f} s".format(epoch_time / 1000))
-            wandb.log({"G_loss": errG.item(), "D_loss": errD.item(), "alpha": alpha[epoch], "epoch_time": epoch_time / 1000})
+            wandb.log({"loss_fake": loss_fake.item(), "loss_real": loss_real.item(), "alpha": alpha[epoch], "epoch_time": epoch_time / 1000})
             ########################################
             x_t_1 = torch.randn_like(posterior.sample())
             fake_sample = sample_from_model(
@@ -398,7 +367,6 @@ def train(rank, gpu, args):
             torchvision.utils.save_image(
                 real_data, os.path.join(exp_path, 'real_data.png'))
             
-            # TODO: wandbに画像を保存
             wandb.log({"fake_sample": [wandb.Image(fake_sample[:4])], "real_data": [wandb.Image(real_data[:4])]})
             
 
@@ -406,20 +374,19 @@ def train(rank, gpu, args):
                 if epoch % args.save_content_every == 0:
                     print('\nSaving content.')
                     content = {'epoch': epoch + 1, 'global_step': global_step, 'args': args,
-                               'netG_dict': netG.state_dict(), 'optimizerG': optimizerG.state_dict(),
-                               'schedulerG': schedulerG.state_dict(), 'netD_dict': netD.state_dict(),
-                               'optimizerD': optimizerD.state_dict(), 'schedulerD': schedulerD.state_dict()}
+                               'netG_dict': netG.state_dict(), 'netD_dict': netD.state_dict(),
+                               'optimizer': optimizer.state_dict(), 'scheduler': scheduler.state_dict()}
                     torch.save(content, os.path.join(exp_path, 'content.pth'))
 
             if epoch % args.save_ckpt_every == 0:
                 if args.use_ema:
-                    optimizerG.swap_parameters_with_ema(
+                    optimizer.swap_parameters_with_ema(
                         store_params_in_ema=True)
 
                 torch.save(netG.state_dict(), os.path.join(
                     exp_path, 'netG_{}.pth'.format(epoch)))
                 if args.use_ema:
-                    optimizerG.swap_parameters_with_ema(
+                    optimizer.swap_parameters_with_ema(
                         store_params_in_ema=True)
     
 
@@ -569,7 +536,7 @@ if __name__ == '__main__':
     size = args.num_process_per_node
 
     wandb.init(
-        project="iddgan-original",
+        project="iddgan-grl",
         name=args.exp,
         # すべてのパラメータをログに記録
         config={
