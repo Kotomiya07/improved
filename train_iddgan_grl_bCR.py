@@ -277,7 +277,7 @@ def train(rank, gpu, args):
     # ddp
     #model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
     
-
+    # MARK: train loop
     for epoch in range(init_epoch, args.num_epoch + 1):
         train_sampler.set_epoch(epoch)
         start_epoch.record()
@@ -304,11 +304,11 @@ def train(rank, gpu, args):
             (loss_fake + loss_real).backward()
             optimizer.step()
 
-            # if args.lazy_reg is None:
-            #     grad_penalty_call(args, y_real, x_t)
-            # else:
-            #     if global_step % args.lazy_reg == 0:
-            #         grad_penalty_call(args, y_real, x_t)
+            if args.lazy_reg is None:
+                grad_penalty_call(args, y_real, x_t)
+            else:
+                if global_step % args.lazy_reg == 0:
+                    grad_penalty_call(args, y_real, x_t)
 
             # # reconstructior loss
             # if args.sigmoid_learning and args.rec_loss:
