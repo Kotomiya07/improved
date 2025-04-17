@@ -105,10 +105,10 @@ def train(rank, gpu, args):
                                               drop_last=True)
     args.ori_image_size = args.image_size
     args.image_size = args.current_resolution
-    G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
-    gen_net = G_NET_ZOO[args.net_type]
+    #G_NET_ZOO = {"normal": NCSNpp, "wavelet": WaveletNCSNpp}
+    #gen_net = G_NET_ZOO[args.net_type]
     disc_net = [Discriminator_small, Discriminator_large]
-    print("GEN: {}, DISC: {}".format(gen_net, disc_net))
+    #print("GEN: {}, DISC: {}".format(gen_net, disc_net))
     #netG = gen_net(args).to(device)
     netG = ImageSpaceDiffiT(
         img_size=16,
